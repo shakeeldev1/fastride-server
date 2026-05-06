@@ -2,12 +2,23 @@ import { Type } from 'class-transformer';
 import {
   IsDateString,
   IsInt,
+  IsIn,
   IsString,
   Min,
   MinLength,
 } from 'class-validator';
 
 export class CreateDriverRegistrationDto {
+  @IsString({ message: 'Vehicle type must be a string' })
+  @IsIn(['bike', 'car', 'auto', 'van'], {
+    message: 'Vehicle type must be one of: bike, car, auto, van',
+  })
+  vehicleType!: string;
+
+  @IsString({ message: 'Operating area must be a string' })
+  @MinLength(2, { message: 'Operating area must be at least 2 characters' })
+  operatingArea!: string;
+
   @IsString({ message: 'First name must be a string' })
   @MinLength(2, { message: 'First name must be at least 2 characters' })
   firstName!: string;

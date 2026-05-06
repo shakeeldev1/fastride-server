@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { normalizeAreaText } from '../../../common/utils/area-normalizer';
 import { CloudinaryService } from '../../user/services/cloudinary.service';
 import { User } from '../../user/entities/user.entity';
 import { CreateDriverRegistrationDto } from '../dto/create-driver-registration.dto';
@@ -111,6 +112,8 @@ export class DriverRegistrationService {
       backsideOfVehicleInformationPublicId:
         backsideOfVehicleInformationUpload.public_id,
       vehicleBrand: dto.vehicleBrand,
+      vehicleType: dto.vehicleType,
+      operatingArea: normalizeAreaText(dto.operatingArea),
       vehicleModel: dto.vehicleModel,
       vehicleColor: dto.vehicleColor,
       numberPlate: dto.numberPlate,
@@ -178,6 +181,8 @@ export class DriverRegistrationService {
       backsideOfVehicleInformationUrl:
         registration.backsideOfVehicleInformationUrl,
       vehicleBrand: registration.vehicleBrand,
+      vehicleType: registration.vehicleType,
+      operatingArea: registration.operatingArea,
       vehicleModel: registration.vehicleModel,
       vehicleColor: registration.vehicleColor,
       numberPlate: registration.numberPlate,

@@ -90,6 +90,12 @@ export class DriverRegistration {
   @Column({ type: 'varchar', length: 100 })
   vehicleBrand!: string;
 
+  @Column({ type: 'varchar', length: 20 })
+  vehicleType!: string;
+
+  @Column({ type: 'varchar', length: 100 })
+  operatingArea!: string;
+
   @Column({ type: 'varchar', length: 100 })
   vehicleModel!: string;
 
