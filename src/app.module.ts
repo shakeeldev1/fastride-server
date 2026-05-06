@@ -8,6 +8,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { DriverRegistrationModule } from './modules/driver-registration/driver-registration.module';
+import { AdminModule } from './modules/admin/admin.module';
 import { UserModule } from './modules/user/user.module';
 
 dotenv.config();
@@ -41,6 +42,7 @@ dotenv.config();
     AuthModule,
     UserModule,
     DriverRegistrationModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],

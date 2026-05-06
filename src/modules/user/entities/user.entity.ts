@@ -53,6 +53,12 @@ export class User {
   @Column({ type: 'boolean', default: true })
   is_active!: boolean;
 
+  @Column({ type: 'boolean', default: false })
+  is_admin!: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  is_driver!: boolean;
+
   @CreateDateColumn({ type: 'timestamp' })
   created_at!: Date;
 
