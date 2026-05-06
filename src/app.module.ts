@@ -7,8 +7,8 @@ import * as dotenv from 'dotenv';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './modules/auth/auth.module';
+import { DriverRegistrationModule } from './modules/driver-registration/driver-registration.module';
 import { UserModule } from './modules/user/user.module';
-import { User } from './modules/user/entities/user.entity';
 
 dotenv.config();
 
@@ -25,7 +25,7 @@ dotenv.config();
       username: process.env.DB_USER || 'postgres',
       password: process.env.DB_PASSWORD || 'password',
       database: process.env.DB_NAME || 'fastride',
-      entities: [User],
+      autoLoadEntities: true,
       synchronize: process.env.NODE_ENV !== 'production',
       logging: process.env.NODE_ENV === 'development',
       ssl:
@@ -40,6 +40,7 @@ dotenv.config();
     }),
     AuthModule,
     UserModule,
+    DriverRegistrationModule,
   ],
   controllers: [AppController],
   providers: [AppService],
