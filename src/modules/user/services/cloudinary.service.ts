@@ -62,7 +62,7 @@ export class CloudinaryService {
   }
 
   /**
-   * Get image URL
+   * Get image URL...
    */
   getImageUrl(publicId: string, options: any = {}): string {
     return cloudinary.url(publicId, {
