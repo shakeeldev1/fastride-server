@@ -120,12 +120,40 @@ CREATE DATABASE indrive;
 5. **Run the application**
 ```bash
 # Development mode
-npm run start:dev
+# Application
+NODE_ENV=development
+PORT=3001
+CORS_ORIGIN=http://localhost:3000
+
+# Database Configuration (PostgreSQL)
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=shakeel
+DB_NAME=fastride
+
+# JWT Configuration
+JWT_SECRET=indrive-secret-key-2026-development
+
+# Email Configuration (Nodemailer)
+SMTP_SERVICE=gmail
+SMTP_USER=shakeeldev.tech@gmail.com
+SMTP_PASSWORD=slcv fcpw ljad cpjy
+
+# Cloudinary Configuration
+CLOUDINARY_CLOUD_NAME=dpgdbecnu
+CLOUDINARY_API_KEY=129221467134845
+CLOUDINARY_API_SECRET=YDlvL6O-dSRo3XQiWNF0er0xdYU
+
+# Frontend URL
+FRONTEND_URL=http://localhost:3000
 
 # Production mode
 npm run build
 npm run start:prod
 ```
+
+<!-- npm run start:dev -->
 
 The API will be running on `http://localhost:3001`
 
