@@ -7,6 +7,38 @@ import { AdminService } from './admin.service';
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
+  @Get('dashboard/stats')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @HttpCode(200)
+  async getDashboardStats() {
+    return this.adminService.getDashboardStats();
+  }
+
+  @Get('users')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @HttpCode(200)
+  async listUsers(
+    @Query('role') role?: string,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.adminService.listUsers({ role, status, search, page, limit });
+  }
+
+  @Get('rides')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @HttpCode(200)
+  async listRides(
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.adminService.listRides({ status, search, page, limit });
+  }
+
   @Get('driver-registrations')
   @UseGuards(JwtAuthGuard, AdminGuard)
   @HttpCode(200)

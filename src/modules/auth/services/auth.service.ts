@@ -193,6 +193,9 @@ export class AuthService {
         email: user.email,
         phone: user.phone,
         profile_picture_url: user.profile_picture_url,
+        is_admin: user.is_admin,
+        is_driver: user.is_driver,
+        is_active: user.is_active,
       },
     };
   }
@@ -255,6 +258,8 @@ export class AuthService {
       profile_picture_url: user.profile_picture_url,
       is_email_verified: user.is_email_verified,
       is_active: user.is_active,
+      is_admin: user.is_admin,
+      is_driver: user.is_driver,
       created_at: user.created_at,
     };
   }

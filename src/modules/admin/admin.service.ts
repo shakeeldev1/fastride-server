@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DriverRegistration } from '../driver-registration/entities/driver-registration.entity';
+import { RideRequest } from '../ride-request/entities/ride-request.entity';
 import { User } from '../user/entities/user.entity';
 
 @Injectable()
@@ -11,7 +12,199 @@ export class AdminService {
     private readonly driverRegistrationRepository: Repository<DriverRegistration>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(RideRequest)
+    private readonly rideRequestRepository: Repository<RideRequest>,
   ) {}
+
+  private parsePagination(page?: string, limit?: string) {
+    const parsedPage = Number.parseInt(page ?? '1', 10);
+    const parsedLimit = Number.parseInt(limit ?? '20', 10);
+
+    const safePage = Number.isNaN(parsedPage) || parsedPage < 1 ? 1 : parsedPage;
+    const safeLimit = Number.isNaN(parsedLimit) || parsedLimit < 1 ? 20 : Math.min(parsedLimit, 100);
+
+    return {
+      page: safePage,
+      limit: safeLimit,
+      skip: (safePage - 1) * safeLimit,
+    };
+  }
+
+  async getDashboardStats() {
+    const [
+      totalUsers,
+      totalActiveUsers,
+      totalDrivers,
+      totalAdmins,
+      pendingDriverApprovals,
+      totalRideRequests,
+      openRideRequests,
+      selectedRideRequests,
+      completedRideRequests,
+      cancelledRideRequests,
+      recentRideRequests,
+      recentUsers,
+    ] = await Promise.all([
+      this.userRepository.count(),
+      this.userRepository.count({ where: { is_active: true } }),
+      this.userRepository.count({ where: { is_driver: true } }),
+      this.userRepository.count({ where: { is_admin: true } }),
+      this.driverRegistrationRepository.count({ where: { status: 'pending' } }),
+      this.rideRequestRepository.count(),
+      this.rideRequestRepository.count({ where: { status: 'open' } }),
+      this.rideRequestRepository.count({ where: { status: 'selected' } }),
+      this.rideRequestRepository.count({ where: { status: 'completed' } }),
+      this.rideRequestRepository.count({ where: { status: 'cancelled' } }),
+      this.rideRequestRepository.find({
+        order: { createdAt: 'DESC' },
+        take: 10,
+      }),
+      this.userRepository.find({
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          is_active: true,
+          is_admin: true,
+          is_driver: true,
+          created_at: true,
+        },
+        order: { created_at: 'DESC' },
+        take: 10,
+      }),
+    ]);
+
+    return {
+      stats: {
+        totalUsers,
+        totalActiveUsers,
+        totalDrivers,
+        totalRiders: Math.max(totalUsers - totalDrivers, 0),
+        totalAdmins,
+        pendingDriverApprovals,
+        totalRideRequests,
+        openRideRequests,
+        selectedRideRequests,
+        completedRideRequests,
+        cancelledRideRequests,
+      },
+      recentRideRequests,
+      recentUsers,
+    };
+  }
+
+  async listUsers(filters: {
+    role?: string;
+    status?: string;
+    search?: string;
+    page?: string;
+    limit?: string;
+  }) {
+    const { page, limit, skip } = this.parsePagination(filters.page, filters.limit);
+
+    const query = this.userRepository.createQueryBuilder('u');
+
+    if (filters.status === 'active') {
+      query.andWhere('u.is_active = :isActive', { isActive: true });
+    } else if (filters.status === 'inactive') {
+      query.andWhere('u.is_active = :isActive', { isActive: false });
+    }
+
+    if (filters.role === 'admin') {
+      query.andWhere('u.is_admin = :isAdmin', { isAdmin: true });
+    } else if (filters.role === 'driver') {
+      query.andWhere('u.is_driver = :isDriver', { isDriver: true });
+    } else if (filters.role === 'rider') {
+      query.andWhere('u.is_admin = :isAdmin AND u.is_driver = :isDriver', {
+        isAdmin: false,
+        isDriver: false,
+      });
+    }
+
+    if (filters.search && filters.search.trim()) {
+      query.andWhere(
+        '(LOWER(u.name) LIKE :search OR LOWER(u.email) LIKE :search OR LOWER(u.phone) LIKE :search)',
+        { search: `%${filters.search.trim().toLowerCase()}%` },
+      );
+    }
+
+    query
+      .select([
+        'u.id',
+        'u.name',
+        'u.email',
+        'u.phone',
+        'u.is_active',
+        'u.is_admin',
+        'u.is_driver',
+        'u.created_at',
+      ])
+      .orderBy('u.created_at', 'DESC')
+      .skip(skip)
+      .take(limit);
+
+    const [users, total] = await query.getManyAndCount();
+
+    return {
+      users,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async listRides(filters: {
+    status?: string;
+    search?: string;
+    page?: string;
+    limit?: string;
+  }) {
+    const { page, limit, skip } = this.parsePagination(filters.page, filters.limit);
+
+    const query = this.rideRequestRepository.createQueryBuilder('r');
+
+    if (filters.status && filters.status !== 'all') {
+      query.andWhere('r.status = :status', { status: filters.status });
+    }
+
+    if (filters.search && filters.search.trim()) {
+      query.andWhere(
+        '(LOWER(r.pickupLocation) LIKE :search OR LOWER(r.dropoffLocation) LIKE :search OR LOWER(r.vehicleType) LIKE :search OR LOWER(r.riderId) LIKE :search)',
+        { search: `%${filters.search.trim().toLowerCase()}%` },
+      );
+    }
+
+    query.orderBy('r.createdAt', 'DESC').skip(skip).take(limit);
+
+    const [rides, total] = await query.getManyAndCount();
+
+    const [openCount, selectedCount, completedCount, cancelledCount] = await Promise.all([
+      this.rideRequestRepository.count({ where: { status: 'open' } }),
+      this.rideRequestRepository.count({ where: { status: 'selected' } }),
+      this.rideRequestRepository.count({ where: { status: 'completed' } }),
+      this.rideRequestRepository.count({ where: { status: 'cancelled' } }),
+    ]);
+
+    return {
+      rides,
+      summary: {
+        open: openCount,
+        selected: selectedCount,
+        completed: completedCount,
+        cancelled: cancelledCount,
+      },
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
 
   async listDriverRegistrations(status?: string) {
     const where = status ? { status } : {};
