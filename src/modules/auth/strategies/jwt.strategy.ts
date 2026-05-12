@@ -1,13 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(private configService: ConfigService) {
-    const secret = configService.get<string>('JWT_SECRET') || 'your-secret-key';
+  constructor() {
+    const secret = process.env.JWT_SECRET || 'your-secret-key';
     console.log('🔐 JwtStrategy constructor - Using secret:', secret);
+    console.log('🔐 JwtStrategy constructor - process.env.JWT_SECRET:', process.env.JWT_SECRET);
 
     // custom extractor to log the incoming Authorization header and token
     const extractor = (req: any) => {
@@ -36,7 +36,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   validate(payload: any) {
-    console.log('🔐 JwtStrategy.validate() called with payload:', payload);
+    console.log('🔐 JwtStrategy.validate() called with payload:', JSON.stringify(payload));
     console.log('✅ JwtStrategy validation passed');
     return {
       id: payload.id,
