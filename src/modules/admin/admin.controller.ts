@@ -1,7 +1,8 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards, Patch } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { AdminService } from './admin.service';
+import { ChangeUserRoleDto } from './dto/change-user-role.dto';
 
 @Controller('api/admin')
 export class AdminController {
@@ -65,5 +66,15 @@ export class AdminController {
   @HttpCode(200)
   async reject(@Param('id') id: string, @Body() body: { reason?: string }) {
     return this.adminService.rejectDriverRegistration(id, body.reason);
+  }
+
+  @Patch('users/:id/role')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @HttpCode(200)
+  async changeUserRole(
+    @Param('id') userId: string,
+    @Body() changeRoleDto: ChangeUserRoleDto,
+  ) {
+    return this.adminService.changeUserRole(userId, changeRoleDto);
   }
 }

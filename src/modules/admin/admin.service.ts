@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { DriverRegistration } from '../driver-registration/entities/driver-registration.entity';
 import { RideRequest } from '../ride-request/entities/ride-request.entity';
 import { User } from '../user/entities/user.entity';
+import { ChangeUserRoleDto } from './dto/change-user-role.dto';
 
 @Injectable()
 export class AdminService {
@@ -251,5 +252,37 @@ export class AdminService {
     // optionally could notify user via email here
 
     return { message: 'Driver registration rejected', registration, reason };
+  }
+
+  async changeUserRole(userId: string, changeRoleDto: ChangeUserRoleDto) {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Update role attributes if provided
+    if (changeRoleDto.is_admin !== undefined) {
+      user.is_admin = changeRoleDto.is_admin;
+    }
+    if (changeRoleDto.is_driver !== undefined) {
+      user.is_driver = changeRoleDto.is_driver;
+    }
+    if (changeRoleDto.is_active !== undefined) {
+      user.is_active = changeRoleDto.is_active;
+    }
+
+    await this.userRepository.save(user);
+
+    return {
+      message: 'User role updated successfully',
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        is_admin: user.is_admin,
+        is_driver: user.is_driver,
+        is_active: user.is_active,
+      },
+    };
   }
 }

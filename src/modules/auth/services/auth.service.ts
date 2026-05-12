@@ -184,6 +184,11 @@ export class AuthService {
       email: user.email,
     });
 
+    console.log('✅ JWT Token Generated');
+    console.log('📋 JWT_SECRET used for signing:', process.env.JWT_SECRET);
+    console.log('🔑 Token payload:', { id: user.id, email: user.email });
+    console.log('🎫 Generated token:', token.substring(0, 50) + '...');
+
     return {
       message: 'Logged in successfully',
       token,
