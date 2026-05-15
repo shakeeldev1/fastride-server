@@ -13,7 +13,6 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
       '📨 Authorization header:',
       authHeader ? `Present (${authHeader.substring(0, 80)}...)` : 'MISSING',
     );
-    console.log('📍 Request URL:', request.method, request.path);
 
     const result = super.canActivate(context) as boolean | Promise<boolean> | Observable<boolean>;
 
