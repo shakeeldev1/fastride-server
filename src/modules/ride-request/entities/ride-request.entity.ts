@@ -26,8 +26,20 @@ export class RideRequest {
   @Column({ type: 'varchar', length: 20 })
   vehicleType!: string;
 
+  @Column({ type: 'varchar', length: 20, default: 'city' })
+  serviceArea!: string;
+
   @Column({ type: 'numeric', precision: 10, scale: 2 })
   offeredPrice!: string;
+
+  @Column({ type: 'numeric', precision: 10, scale: 2, default: 0 })
+  estimatedDistanceKm!: string;
+
+  @Column({ type: 'numeric', precision: 10, scale: 2, default: 0 })
+  companyCommission!: string;
+
+  @Column({ type: 'numeric', precision: 10, scale: 2, default: 0 })
+  driverPayout!: string;
 
   @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
   pickupLatitude!: string | null;

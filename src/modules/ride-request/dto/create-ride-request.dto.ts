@@ -27,15 +27,24 @@ export class CreateRideRequestDto {
   dropoffLocation!: string;
 
   @IsString({ message: 'Vehicle type must be a string' })
-  @IsIn(['bike', 'car', 'auto', 'van'], {
-    message: 'Vehicle type must be one of: bike, car, auto, van',
+  @IsIn(['bike', 'rikshaw', 'car_without_ac', 'car_with_ac', 'business_car'], {
+    message:
+      'Vehicle type must be one of: bike, rikshaw, car_without_ac, car_with_ac, business_car',
   })
   vehicleType!: string;
 
+  @IsOptional()
+  @IsString({ message: 'Service area must be a string' })
+  @IsIn(['city', 'out_of_city'], {
+    message: 'Service area must be one of: city, out_of_city',
+  })
+  serviceArea?: string;
+
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({}, { message: 'Offered price must be a number' })
   @Min(1, { message: 'Offered price must be greater than 0' })
-  offeredPrice!: number;
+  offeredPrice?: number;
 
   @IsOptional()
   @Type(() => Number)

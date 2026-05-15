@@ -10,6 +10,12 @@ import {
   normalizeAreaText,
   resolveAreaFromLocationText,
 } from '../../../common/utils/area-normalizer';
+import {
+  calculateDistanceKm,
+  calculateRideFare,
+  RideServiceArea,
+  RideVehicleType,
+} from '../../../common/utils/fare-calculator';
 import { EmailService } from '../../auth/services/email.service';
 import { DriverRegistration } from '../../driver-registration/entities/driver-registration.entity';
 import { User } from '../../user/entities/user.entity';
@@ -43,6 +49,25 @@ export class RideRequestService {
     }
 
     const targetArea = this.resolveTargetArea(dto.pickupArea, dto.pickupLocation);
+    const serviceArea: RideServiceArea = dto.serviceArea === 'out_of_city' ? 'out_of_city' : 'city';
+    const vehicleType = dto.vehicleType as RideVehicleType;
+    const estimatedDistanceKm = this.resolveEstimatedDistanceKm(dto);
+
+    let fareBreakdown;
+
+    try {
+      fareBreakdown = calculateRideFare({
+        vehicleType,
+        serviceArea,
+        estimatedDistanceKm,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Sorry service not available') {
+        throw new BadRequestException(error.message);
+      }
+
+      throw error;
+    }
 
     const rideRequest = this.rideRequestRepository.create({
       riderId,
@@ -50,7 +75,11 @@ export class RideRequestService {
       pickupArea: targetArea,
       dropoffLocation: dto.dropoffLocation,
       vehicleType: dto.vehicleType,
-      offeredPrice: dto.offeredPrice.toFixed(2),
+      serviceArea,
+      offeredPrice: fareBreakdown.totalFare.toFixed(2),
+      estimatedDistanceKm: fareBreakdown.estimatedDistanceKm.toFixed(2),
+      companyCommission: fareBreakdown.companyCommission.toFixed(2),
+      driverPayout: fareBreakdown.driverPayout.toFixed(2),
       pickupLatitude:
         dto.pickupLatitude !== undefined ? String(dto.pickupLatitude) : null,
       pickupLongitude:
@@ -70,7 +99,7 @@ export class RideRequestService {
     const candidateDriverRegs = await this.driverRegistrationRepository.find({
       where: {
         status: 'approved',
-        vehicleType: dto.vehicleType,
+        vehicleType: this.resolveDriverVehicleFamily(dto.vehicleType),
       },
     });
 
@@ -94,7 +123,7 @@ export class RideRequestService {
         continue;
       }
 
-      const alertMessage = `New ${dto.vehicleType} ride request from ${dto.pickupLocation} to ${dto.dropoffLocation}. Offered price: ${dto.offeredPrice}`;
+      const alertMessage = `New ${dto.vehicleType} ride request from ${dto.pickupLocation} to ${dto.dropoffLocation}. Offered price: ${fareBreakdown.totalFare}`;
 
       const alert = this.driverRideAlertRepository.create({
         rideRequestId: rideRequest.id,
@@ -114,7 +143,7 @@ export class RideRequestService {
           pickupLocation: dto.pickupLocation,
           dropoffLocation: dto.dropoffLocation,
           vehicleType: dto.vehicleType,
-          offeredPrice: dto.offeredPrice,
+          offeredPrice: fareBreakdown.totalFare,
           rideRequestId: rideRequest.id,
         });
 
@@ -132,6 +161,7 @@ export class RideRequestService {
       message: 'Ride request created and alerts dispatched to matching drivers',
       rideRequest: this.formatRideRequest(rideRequest),
       dispatchedAlerts: alerts.length,
+      fareBreakdown,
     };
   }
 
@@ -340,7 +370,11 @@ export class RideRequestService {
       pickupArea: rideRequest.pickupArea,
       dropoffLocation: rideRequest.dropoffLocation,
       vehicleType: rideRequest.vehicleType,
+      serviceArea: rideRequest.serviceArea,
       offeredPrice: Number(rideRequest.offeredPrice),
+      estimatedDistanceKm: Number(rideRequest.estimatedDistanceKm),
+      companyCommission: Number(rideRequest.companyCommission),
+      driverPayout: Number(rideRequest.driverPayout),
       pickupLatitude:
         rideRequest.pickupLatitude !== null
           ? Number(rideRequest.pickupLatitude)
@@ -381,5 +415,39 @@ export class RideRequestService {
     }
 
     throw new BadRequestException('Unable to determine pickup area from pickup location');
+  }
+
+  private resolveEstimatedDistanceKm(dto: CreateRideRequestDto): number {
+    if (
+      dto.pickupLatitude === undefined ||
+      dto.pickupLongitude === undefined ||
+      dto.dropoffLatitude === undefined ||
+      dto.dropoffLongitude === undefined
+    ) {
+      throw new BadRequestException('Pickup and dropoff coordinates are required to calculate fare');
+    }
+
+    return calculateDistanceKm({
+      pickupLatitude: dto.pickupLatitude,
+      pickupLongitude: dto.pickupLongitude,
+      dropoffLatitude: dto.dropoffLatitude,
+      dropoffLongitude: dto.dropoffLongitude,
+    });
+  }
+
+  private resolveDriverVehicleFamily(vehicleType: string): string {
+    if (vehicleType === 'bike') {
+      return 'bike';
+    }
+
+    if (vehicleType === 'rikshaw') {
+      return 'auto';
+    }
+
+    if (vehicleType === 'car_without_ac' || vehicleType === 'car_with_ac' || vehicleType === 'business_car') {
+      return 'car';
+    }
+
+    return vehicleType;
   }
 }
