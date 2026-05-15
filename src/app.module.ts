@@ -30,10 +30,7 @@ dotenv.config();
       autoLoadEntities: true,
       synchronize: process.env.NODE_ENV !== 'production',
       logging: process.env.NODE_ENV === 'development',
-      ssl:
-        process.env.NODE_ENV === 'production'
-          ? { rejectUnauthorized: false }
-          : false,
+      ssl: { rejectUnauthorized: false },
     }),
     JwtModule.register({
       global: true,
