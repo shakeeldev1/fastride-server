@@ -4,7 +4,7 @@ import { Injectable } from '@nestjs/common';
 export class AppService {
   getHello(): object {
     return {
-      message: 'Welcome to Indrive API',
+      message: 'Welcome to Fastride API',
       version: '1.0.0',
       timestamp: new Date().toISOString(),
     };
