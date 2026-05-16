@@ -109,8 +109,12 @@ export class AuthService {
 
     await this.userRepository.save(user);
 
+    // Generate JWT token on successful verification
+    const token = this.jwtService.sign({ id: user.id, email: user.email });
+
     return {
       message: 'Email verified successfully',
+      token,
       user: {
         id: user.id,
         name: user.name,

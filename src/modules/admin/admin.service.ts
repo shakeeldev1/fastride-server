@@ -285,4 +285,15 @@ export class AdminService {
       },
     };
   }
+
+  async deleteUser(userId: string) {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    await this.userRepository.remove(user);
+
+    return { message: 'User deleted successfully' };
+  }
 }
