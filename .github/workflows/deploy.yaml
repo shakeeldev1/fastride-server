@@ -1,0 +1,56 @@
+name: Deploy Fastride application on AWS
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          script_stop: true
+          script: |
+            set -e
+            APP_DIR="/home/ubuntu/fastride-server"
+            BRANCH="main"
+
+            cd "$APP_DIR"
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+            git pull origin "$BRANCH"
+
+            npm ci
+            npm run build
+
+            if command -v pm2 >/dev/null 2>&1; then
+              if pm2 describe main >/dev/null 2>&1; then
+                pm2 restart main --update-env
+              elif pm2 describe 0 >/dev/null 2>&1; then
+                pm2 restart 0 --update-env
+              else
+                pm2 start dist/main.js --name main
+              fi
+              pm2 save
+            elif systemctl list-unit-files | grep -q '^fastride-server.service'; then
+              sudo systemctl restart fastride-server
+            else
+              pkill -f "node dist/main.js" || true
+              nohup node dist/main.js > app.log 2>&1 &
+            fi
+
+      - name: Output server URL
+        run: echo "Server deployed to EC2"
