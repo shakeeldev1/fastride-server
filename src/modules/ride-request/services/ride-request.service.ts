@@ -116,7 +116,7 @@ export class RideRequestService {
 
     const targetDriverRegs = candidateDriverRegs.filter((driverReg) => {
       const driverNormalizedArea = normalizeAreaText(driverReg.operatingArea);
-      const isMatch = driverNormalizedArea === targetArea;
+      const isMatch = this.areasMatch(driverNormalizedArea, targetArea);
 
       if (!isMatch) {
         console.log(
@@ -545,9 +545,12 @@ export class RideRequestService {
     pickupLocation: string,
     dropoffLocation?: string,
   ): string {
-    // If explicit pickupArea is provided and valid, use it (highest priority)
-    if (pickupArea && pickupArea.trim().length >= 2) {
-      return normalizeAreaText(pickupArea);
+    const normalizedPickupArea = pickupArea ? normalizeAreaText(pickupArea) : '';
+
+    // Prefer a location-derived city/area when the explicit pickupArea is too broad
+    // (for example: "pakistan" or another country-level token).
+    if (normalizedPickupArea && !this.isBroadAreaToken(normalizedPickupArea)) {
+      return normalizedPickupArea;
     }
 
     // Try to extract area from pickup location
@@ -570,6 +573,28 @@ export class RideRequestService {
     throw new BadRequestException(
       'Unable to determine pickup area from pickup location or dropoff location',
     );
+  }
+
+  private isBroadAreaToken(area: string): boolean {
+    return new Set([
+      'pakistan',
+      'india',
+      'usa',
+      'united states',
+      'united kingdom',
+      'uk',
+      'state',
+      'province',
+      'county',
+    ]).has(area);
+  }
+
+  private areasMatch(driverArea: string, targetArea: string): boolean {
+    if (!driverArea || !targetArea) return false;
+    if (driverArea === targetArea) return true;
+
+    // Allow specific and broader forms to match, e.g. "bahawalpur" and "bahawalpur pakistan".
+    return driverArea.includes(targetArea) || targetArea.includes(driverArea);
   }
 
   private resolveEstimatedDistanceKm(dto: CreateRideRequestDto): number {
