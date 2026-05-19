@@ -9,6 +9,8 @@ import { DriverRideResponse } from './entities/driver-ride-response.entity';
 import { RideRequest } from './entities/ride-request.entity';
 import { RideRequestService } from './services/ride-request.service';
 import { RideRequestGateway } from './ride-request.gateway';
+import { ChatMessage } from './entities/chat-message.entity';
+import { ChatService } from './services/chat.service';
 
 @Module({
   imports: [
@@ -16,12 +18,13 @@ import { RideRequestGateway } from './ride-request.gateway';
       RideRequest,
       DriverRideAlert,
       DriverRideResponse,
+      ChatMessage,
       DriverRegistration,
       User,
     ]),
     AuthModule,
   ],
   controllers: [RideRequestController],
-  providers: [RideRequestService, RideRequestGateway],
+  providers: [RideRequestService, RideRequestGateway, ChatService],
 })
 export class RideRequestModule {}

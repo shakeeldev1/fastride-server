@@ -78,6 +78,16 @@ export class RideRequestController {
     );
   }
 
+  @Get(':rideRequestId/chat')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  async getChatMessages(
+    @Request() req: any,
+    @Param('rideRequestId') rideRequestId: string,
+  ) {
+    return this.rideRequestService.getChatMessages(req.user.id, rideRequestId);
+  }
+
   @Post(':rideRequestId/select-driver/:driverId')
   @UseGuards(JwtAuthGuard)
   @HttpCode(200)

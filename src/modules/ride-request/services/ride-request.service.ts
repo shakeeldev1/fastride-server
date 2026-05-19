@@ -25,6 +25,7 @@ import { DriverRideAlert } from '../entities/driver-ride-alert.entity';
 import { DriverRideResponse } from '../entities/driver-ride-response.entity';
 import { RideRequest } from '../entities/ride-request.entity';
 import { RideRequestGateway } from '../ride-request.gateway';
+import { ChatService } from './chat.service';
 
 @Injectable()
 export class RideRequestService {
@@ -41,6 +42,7 @@ export class RideRequestService {
     private readonly userRepository: Repository<User>,
     private readonly emailService: EmailService,
     private readonly gateway: RideRequestGateway,
+    private readonly chatService: ChatService,
   ) {}
 
   async createRideRequest(riderId: string, dto: CreateRideRequestDto) {
@@ -417,6 +419,13 @@ export class RideRequestService {
       console.warn('Realtime notify selected driver failed:', err);
     }
 
+    // Auto-join connected rider/driver sockets to chat room and notify them
+    try {
+      await this.gateway.joinUsersToChatRoom(rideRequest.id, rideRequest.riderId, driverId);
+    } catch (err) {
+      console.warn('Failed to join users to chat room:', err);
+    }
+
     return {
       message: 'Driver selected successfully',
       rideRequest: this.formatRideRequest(rideRequest),
@@ -431,6 +440,23 @@ export class RideRequestService {
         message: chosenResponse.message,
       },
     };
+  }
+
+  async getChatMessages(userId: string, rideRequestId: string) {
+    const ride = await this.rideRequestRepository.findOne({ where: { id: rideRequestId } });
+
+    if (!ride) {
+      throw new NotFoundException('Ride request not found');
+    }
+
+    // Only allow rider or selected driver (or driver if not selected but targeted?) to fetch chat
+    const isParticipant = userId === ride.riderId || userId === ride.selectedDriverId;
+
+    if (!isParticipant) {
+      throw new ForbiddenException('You are not authorized to view this chat');
+    }
+
+    return this.chatService.getMessages(rideRequestId);
   }
 
   async markDriverAlertRead(driverId: string, alertId: string, isRead: boolean) {
