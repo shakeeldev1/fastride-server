@@ -109,8 +109,25 @@ export class RideRequestService {
       },
     });
 
-    const targetDriverRegs = candidateDriverRegs.filter(
-      (driverReg) => normalizeAreaText(driverReg.operatingArea) === targetArea,
+    console.log(
+      `[Ride Alert] Searching drivers: vehicleFamily=${this.resolveDriverVehicleFamily(dto.vehicleType)}, targetArea=${targetArea}, totalCandidates=${candidateDriverRegs.length}`,
+    );
+
+    const targetDriverRegs = candidateDriverRegs.filter((driverReg) => {
+      const driverNormalizedArea = normalizeAreaText(driverReg.operatingArea);
+      const isMatch = driverNormalizedArea === targetArea;
+
+      if (!isMatch) {
+        console.log(
+          `[Ride Alert] Driver ${driverReg.firstName} ${driverReg.lastName}: operatingArea="${driverReg.operatingArea}" normalizes to "${driverNormalizedArea}", expected "${targetArea}" - MISMATCH`,
+        );
+      }
+
+      return isMatch;
+    });
+
+    console.log(
+      `[Ride Alert] Found ${targetDriverRegs.length} drivers in target area (${targetArea}) after vehicle family + area filtering`,
     );
 
     const alerts: DriverRideAlert[] = [];
@@ -126,8 +143,15 @@ export class RideRequestService {
       });
 
       if (!driver) {
+        console.log(
+          `[Ride Alert] Driver ${driverReg.firstName} ${driverReg.lastName}: user record check failed (not found or not active/verified)`,
+        );
         continue;
       }
+
+      console.log(
+        `[Ride Alert] Creating alert for driver ${driver.name} (${driver.id}) in area ${targetArea}`,
+      );
 
       const alertMessage = `New ${dto.vehicleType} ride request from ${dto.pickupLocation} to ${dto.dropoffLocation}. Offered price: ${fareBreakdown.totalFare}`;
 
@@ -564,5 +588,40 @@ export class RideRequestService {
     }
 
     return vehicleType;
+  }
+
+  async debugAreaResolution(pickupArea: string | undefined, pickupLocation: string) {
+    const resolvedArea = this.resolveTargetArea(pickupArea, pickupLocation);
+
+    // Fetch all drivers with approved status and car vehicle type
+    const allCarDrivers = await this.driverRegistrationRepository.find({
+      where: { status: 'approved', vehicleType: 'car' },
+    });
+
+    const matchingDrivers = allCarDrivers.filter(
+      (driverReg) => normalizeAreaText(driverReg.operatingArea) === resolvedArea,
+    );
+
+    return {
+      input: {
+        pickupArea: pickupArea || '(not provided)',
+        pickupLocation,
+      },
+      resolvedArea,
+      allCarDrivers: allCarDrivers.map((d) => ({
+        id: d.id,
+        name: `${d.firstName} ${d.lastName}`,
+        operatingArea: d.operatingArea,
+        normalizedOperatingArea: normalizeAreaText(d.operatingArea),
+        vehicleType: d.vehicleType,
+      })),
+      matchingDrivers: matchingDrivers.map((d) => ({
+        id: d.id,
+        name: `${d.firstName} ${d.lastName}`,
+        operatingArea: d.operatingArea,
+      })),
+      matchCount: matchingDrivers.length,
+      note: 'This shows all drivers with status=approved and vehicleType=car, and filters by area match. The resolvedArea is what will be used to match drivers.',
+    };
   }
 }

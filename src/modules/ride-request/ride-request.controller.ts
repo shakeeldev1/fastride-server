@@ -117,4 +117,15 @@ export class RideRequestController {
       dto.isRead,
     );
   }
+
+  @Post('debug/area-resolution')
+  @HttpCode(200)
+  async debugAreaResolution(
+    @Body() body: { pickupLocation: string; pickupArea?: string },
+  ) {
+    return this.rideRequestService.debugAreaResolution(
+      body.pickupArea,
+      body.pickupLocation,
+    );
+  }
 }
