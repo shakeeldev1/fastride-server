@@ -8,6 +8,9 @@ import { SignupDto } from '../dto/signup.dto';
 import { LoginDto } from '../dto/login.dto';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { ChangePasswordDto } from '../dto/change-password.dto';
+import { ForgotPasswordDto } from '../dto/forgot-password.dto';
+import { ResetPasswordDto } from '../dto/reset-password.dto';
+import * as crypto from 'crypto';
 import { EmailService } from './email.service';
 
 @Injectable()
@@ -240,6 +243,68 @@ export class AuthService {
 
     return {
       message: 'Password changed successfully',
+    };
+  }
+
+  /**
+   * Initiate forgot password flow: generate token, save, email link
+   */
+  async forgotPassword(forgotDto: ForgotPasswordDto) {
+    const { email } = forgotDto;
+
+    const user = await this.userRepository.findOne({ where: { email } });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Generate secure token
+    const token = crypto.randomBytes(32).toString('hex');
+    const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    user.reset_password_token = token;
+    user.reset_password_expires_at = expires;
+
+    await this.userRepository.save(user);
+
+    // Send email with reset link
+    await this.emailService.sendPasswordResetEmail(email, token, user.name);
+
+    return {
+      message: 'Password reset email sent',
+    };
+  }
+
+  /**
+   * Complete password reset using token
+   */
+  async resetPassword(resetDto: ResetPasswordDto) {
+    const { token, new_password, confirm_password } = resetDto;
+
+    if (new_password !== confirm_password) {
+      throw new BadRequestException('Passwords do not match');
+    }
+
+    const user = await this.userRepository.findOne({ where: { reset_password_token: token } });
+
+    if (!user) {
+      throw new NotFoundException('Invalid or expired token');
+    }
+
+    if (!user.reset_password_expires_at || new Date() > user.reset_password_expires_at) {
+      throw new BadRequestException('Reset token has expired');
+    }
+
+    const hashedPassword = await bcrypt.hash(new_password, 10);
+
+    user.password = hashedPassword;
+    user.reset_password_token = null as unknown as string;
+    user.reset_password_expires_at = null as unknown as Date;
+
+    await this.userRepository.save(user);
+
+    return {
+      message: 'Password has been reset successfully',
     };
   }
 

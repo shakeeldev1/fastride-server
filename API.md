@@ -65,6 +65,24 @@ This document lists server API endpoints, request/response fields, and role requ
 - Response: 200
   - `message`
 
+### POST /api/auth/forgot-password
+- Role: Public
+- Content-Type: `application/json`
+- Body:
+  - `email` (string, required)
+- Response: 200
+  - `message`
+
+### POST /api/auth/reset-password
+- Role: Public
+- Content-Type: `application/json`
+- Body:
+  - `token` (string, required) — token sent in reset email
+  - `new_password` (string, required)
+  - `confirm_password` (string, required)
+- Response: 200
+  - `message`
+
 ---
 
 ## Users

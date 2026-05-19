@@ -23,6 +23,12 @@ export class User {
   @Column({ type: 'timestamp', nullable: true })
   otp_expires_at!: Date;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  reset_password_token!: string;
+
+  @Column({ type: 'timestamp', nullable: true })
+  reset_password_expires_at!: Date;
+
   @Column({ type: 'boolean', default: false })
   is_email_verified!: boolean;
 
