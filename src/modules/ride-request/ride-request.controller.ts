@@ -121,11 +121,12 @@ export class RideRequestController {
   @Post('debug/area-resolution')
   @HttpCode(200)
   async debugAreaResolution(
-    @Body() body: { pickupLocation: string; pickupArea?: string },
+    @Body() body: { pickupLocation: string; pickupArea?: string; dropoffLocation?: string },
   ) {
     return this.rideRequestService.debugAreaResolution(
       body.pickupArea,
       body.pickupLocation,
+      body.dropoffLocation,
     );
   }
 }

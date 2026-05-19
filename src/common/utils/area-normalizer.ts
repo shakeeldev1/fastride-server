@@ -8,6 +8,21 @@ export function normalizeAreaText(value: string): string {
     .trim();
 }
 
+export function isGenericLocationString(location: string): boolean {
+  const normalized = normalizeAreaText(location);
+  const genericPatterns = [
+    'current location',
+    'my location',
+    'current position',
+    'my address',
+    'my place',
+    'here',
+    'home',
+  ];
+
+  return genericPatterns.some((pattern) => normalized === pattern || normalized.includes(pattern));
+}
+
 export function resolveAreaFromLocationText(location: string): string {
   const commaParts = location
     .split(',')

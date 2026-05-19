@@ -9,6 +9,7 @@ import { Repository } from 'typeorm';
 import {
   normalizeAreaText,
   resolveAreaFromLocationText,
+  isGenericLocationString,
 } from '../../../common/utils/area-normalizer';
 import {
   calculateDistanceKm,
@@ -52,7 +53,7 @@ export class RideRequestService {
       throw new BadRequestException('Rider account is not active');
     }
 
-    const targetArea = this.resolveTargetArea(dto.pickupArea, dto.pickupLocation);
+    const targetArea = this.resolveTargetArea(dto.pickupArea, dto.pickupLocation, dto.dropoffLocation);
     const serviceArea: RideServiceArea = dto.serviceArea === 'out_of_city' ? 'out_of_city' : 'city';
     const vehicleType = dto.vehicleType as RideVehicleType;
     const estimatedDistanceKm = this.resolveEstimatedDistanceKm(dto);
@@ -542,18 +543,33 @@ export class RideRequestService {
   private resolveTargetArea(
     pickupArea: string | undefined,
     pickupLocation: string,
+    dropoffLocation?: string,
   ): string {
+    // If explicit pickupArea is provided and valid, use it (highest priority)
     if (pickupArea && pickupArea.trim().length >= 2) {
       return normalizeAreaText(pickupArea);
     }
 
-    const derivedArea = resolveAreaFromLocationText(pickupLocation);
+    // Try to extract area from pickup location
+    let derivedArea = resolveAreaFromLocationText(pickupLocation);
+
+    // If pickup location is generic (e.g., "Current location"), try dropoff instead
+    if (derivedArea.length === 0 || isGenericLocationString(pickupLocation)) {
+      if (dropoffLocation) {
+        console.log(
+          `[Area Resolution] Pickup location "${pickupLocation}" is generic or empty. Falling back to dropoff location.`,
+        );
+        derivedArea = resolveAreaFromLocationText(dropoffLocation);
+      }
+    }
 
     if (derivedArea.length > 0) {
       return derivedArea;
     }
 
-    throw new BadRequestException('Unable to determine pickup area from pickup location');
+    throw new BadRequestException(
+      'Unable to determine pickup area from pickup location or dropoff location',
+    );
   }
 
   private resolveEstimatedDistanceKm(dto: CreateRideRequestDto): number {
@@ -590,8 +606,8 @@ export class RideRequestService {
     return vehicleType;
   }
 
-  async debugAreaResolution(pickupArea: string | undefined, pickupLocation: string) {
-    const resolvedArea = this.resolveTargetArea(pickupArea, pickupLocation);
+  async debugAreaResolution(pickupArea: string | undefined, pickupLocation: string, dropoffLocation?: string) {
+    const resolvedArea = this.resolveTargetArea(pickupArea, pickupLocation, dropoffLocation);
 
     // Fetch all drivers with approved status and car vehicle type
     const allCarDrivers = await this.driverRegistrationRepository.find({
