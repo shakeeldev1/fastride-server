@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import {
   normalizeAreaText,
   resolveAreaFromLocationText,
@@ -231,7 +231,45 @@ export class RideRequestService {
       order: { createdAt: 'DESC' },
     });
 
-    return { alerts };
+    if (alerts.length === 0) {
+      return { alerts: [] };
+    }
+
+    const rideRequestIds = Array.from(new Set(alerts.map((alert) => alert.rideRequestId)));
+    const rideRequests = await this.rideRequestRepository.find({
+      where: { id: In(rideRequestIds) },
+    });
+
+    const rideById = new Map(rideRequests.map((ride) => [ride.id, ride]));
+
+    const enrichedAlerts = alerts.map((alert) => {
+      const ride = rideById.get(alert.rideRequestId);
+
+      return {
+        ...alert,
+        ride: ride
+          ? {
+              pickupLocation: ride.pickupLocation,
+              dropoffLocation: ride.dropoffLocation,
+              pickupArea: ride.pickupArea,
+              vehicleType: ride.vehicleType,
+              serviceArea: ride.serviceArea,
+              offeredPrice: Number(ride.offeredPrice),
+              estimatedDistanceKm: Number(ride.estimatedDistanceKm),
+              companyCommission: Number(ride.companyCommission),
+              driverPayout: Number(ride.driverPayout),
+              pickupLatitude: ride.pickupLatitude !== null ? Number(ride.pickupLatitude) : null,
+              pickupLongitude: ride.pickupLongitude !== null ? Number(ride.pickupLongitude) : null,
+              dropoffLatitude: ride.dropoffLatitude !== null ? Number(ride.dropoffLatitude) : null,
+              dropoffLongitude: ride.dropoffLongitude !== null ? Number(ride.dropoffLongitude) : null,
+              status: ride.status,
+              createdAt: ride.createdAt,
+            }
+          : null,
+      };
+    });
+
+    return { alerts: enrichedAlerts };
   }
 
   async estimateFare(dto: { pickupLatitude: number; pickupLongitude: number; dropoffLatitude: number; dropoffLongitude: number; serviceArea?: string; }) {
