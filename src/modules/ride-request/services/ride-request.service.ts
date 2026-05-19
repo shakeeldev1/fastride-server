@@ -24,6 +24,7 @@ import { DriverRespondRideRequestDto } from '../dto/driver-respond-ride-request.
 import { DriverRideAlert } from '../entities/driver-ride-alert.entity';
 import { DriverRideResponse } from '../entities/driver-ride-response.entity';
 import { RideRequest } from '../entities/ride-request.entity';
+import { RideRequestGateway } from '../ride-request.gateway';
 
 @Injectable()
 export class RideRequestService {
@@ -39,6 +40,7 @@ export class RideRequestService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly emailService: EmailService,
+    private readonly gateway: RideRequestGateway,
   ) {}
 
   async createRideRequest(riderId: string, dto: CreateRideRequestDto) {
@@ -69,6 +71,8 @@ export class RideRequestService {
       throw error;
     }
 
+    const offeredPriceValue = dto.offeredPrice !== undefined ? Number(dto.offeredPrice) : Number(fareBreakdown.totalFare);
+
     const rideRequest = this.rideRequestRepository.create({
       riderId,
       pickupLocation: dto.pickupLocation,
@@ -76,7 +80,7 @@ export class RideRequestService {
       dropoffLocation: dto.dropoffLocation,
       vehicleType: dto.vehicleType,
       serviceArea,
-      offeredPrice: fareBreakdown.totalFare.toFixed(2),
+      offeredPrice: offeredPriceValue.toFixed(2),
       estimatedDistanceKm: fareBreakdown.estimatedDistanceKm.toFixed(2),
       companyCommission: fareBreakdown.companyCommission.toFixed(2),
       driverPayout: fareBreakdown.driverPayout.toFixed(2),
@@ -157,6 +161,22 @@ export class RideRequestService {
       alerts.push(alert);
     }
 
+    // Emit real-time event to drivers in the area+vehicle family room
+    try {
+      const vehicleFamily = this.resolveDriverVehicleFamily(dto.vehicleType);
+      this.gateway.notifyDrivers(targetArea, vehicleFamily, {
+        rideRequestId: rideRequest.id,
+        pickupLocation: dto.pickupLocation,
+        dropoffLocation: dto.dropoffLocation,
+        vehicleType: dto.vehicleType,
+        offeredPrice: offeredPriceValue,
+        estimatedDistanceKm: fareBreakdown.estimatedDistanceKm,
+      });
+    } catch (err) {
+      // don't break the main flow on realtime failure
+      console.warn('Realtime notify failed:', err);
+    }
+
     return {
       message: 'Ride request created and alerts dispatched to matching drivers',
       rideRequest: this.formatRideRequest(rideRequest),
@@ -185,6 +205,47 @@ export class RideRequestService {
     });
 
     return { alerts };
+  }
+
+  async estimateFare(dto: { pickupLatitude: number; pickupLongitude: number; dropoffLatitude: number; dropoffLongitude: number; serviceArea?: string; }) {
+    const estimatedDistanceKm = calculateDistanceKm({
+      pickupLatitude: dto.pickupLatitude,
+      pickupLongitude: dto.pickupLongitude,
+      dropoffLatitude: dto.dropoffLatitude,
+      dropoffLongitude: dto.dropoffLongitude,
+    });
+
+    const serviceArea: RideServiceArea = dto.serviceArea === 'out_of_city' ? 'out_of_city' : 'city';
+
+    const vehicleTypes: RideVehicleType[] = [
+      'bike',
+      'rikshaw',
+      'car_without_ac',
+      'car_with_ac',
+      'business_car',
+    ];
+
+    const results: Record<string, any> = {};
+
+    for (const vt of vehicleTypes) {
+      try {
+        const breakdown = calculateRideFare({
+          vehicleType: vt,
+          serviceArea,
+          estimatedDistanceKm,
+        });
+
+        results[vt] = breakdown;
+      } catch (err) {
+        results[vt] = { error: (err as Error).message };
+      }
+    }
+
+    return {
+      estimatedDistanceKm,
+      serviceArea,
+      fares: results,
+    };
   }
 
   async respondToRideRequest(
@@ -238,6 +299,23 @@ export class RideRequestService {
     alert.isRead = true;
     alert.inAppStatus = 'opened';
     await this.driverRideAlertRepository.save(alert);
+    // Notify rider in real-time about this response
+    try {
+      const ride = await this.rideRequestRepository.findOne({ where: { id: rideRequestId } });
+      if (ride) {
+        this.gateway.notifyRiderResponse(ride.riderId, {
+          rideRequestId,
+          driverId,
+          decision: response.decision,
+          counterOfferPrice:
+            response.counterOfferPrice !== null ? Number(response.counterOfferPrice) : null,
+          message: response.message,
+          createdAt: response.createdAt,
+        });
+      }
+    } catch (err) {
+      console.warn('Realtime rider notify failed:', err);
+    }
 
     return {
       message: 'Ride response submitted successfully',
@@ -256,6 +334,24 @@ export class RideRequestService {
       },
     };
   }
+
+    // Notify rider in real-time about this response
+    try {
+      const ride = await this.rideRequestRepository.findOne({ where: { id: rideRequestId } });
+      if (ride) {
+        this.gateway.notifyRiderResponse(ride.riderId, {
+          rideRequestId,
+          driverId,
+          decision: response.decision,
+          counterOfferPrice:
+            response.counterOfferPrice !== null ? Number(response.counterOfferPrice) : null,
+          message: response.message,
+          createdAt: response.createdAt,
+        });
+      }
+    } catch (err) {
+      console.warn('Realtime rider notify failed:', err);
+    }
 
   async getRideResponsesForRider(riderId: string, rideRequestId: string) {
     const rideRequest = await this.rideRequestRepository.findOne({
@@ -327,6 +423,17 @@ export class RideRequestService {
     rideRequest.selectedDriverId = driverId;
     rideRequest.selectedAt = new Date();
     await this.rideRequestRepository.save(rideRequest);
+
+    // Notify rider and driver in real-time
+    try {
+      this.gateway.notifyDriverSelected(rideRequest.riderId, driverId, {
+        rideRequestId,
+        driverId,
+        selectedAt: rideRequest.selectedAt,
+      });
+    } catch (err) {
+      console.warn('Realtime notify selected driver failed:', err);
+    }
 
     return {
       message: 'Driver selected successfully',

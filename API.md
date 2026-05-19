@@ -170,7 +170,36 @@ Notes:
 
 ## Ride Requests & Driver Alerts
 
-This module handles rider trip requests and dispatches alerts to matching approved drivers by `vehicleType`.
+This module implements the Indrive-style request, bidding and acceptance flow. Summary of the user flow:
+
+- Rider enters pickup and dropoff locations in the app.
+- Frontend computes distance (Haversine) using coordinates and calls the backend `POST /api/ride-requests/estimate` to receive a professional fare breakdown for each vehicle type.
+- Frontend shows fares to the rider; the rider may optionally increase the offered price.
+- Rider selects a vehicle type and submits the ride request (`POST /api/ride-requests`). The request includes coordinates, selected vehicle type, and the (possibly adjusted) `offeredPrice`.
+- Backend creates a `ride_request` record, finds matching approved drivers in the same normalized operating area, and creates a `driver_ride_alert` for each. Alerts are delivered via in-app/system/email. (Socket delivery may be used; see notes.)
+- Drivers targeted by the alert can respond with `interested` plus an optional `counterOfferPrice` (they may raise their price) using `POST /api/ride-requests/:rideRequestId/driver/respond`.
+- Rider fetches responses with `GET /api/ride-requests/:rideRequestId/responses` and sees all interested drivers and any counter-offers.
+- Rider selects one driver by calling `POST /api/ride-requests/:rideRequestId/select-driver/:driverId`, which marks the ride as `driver_selected` and stores the chosen driver.
+
+Notes on real-time behaviour:
+- For a real-time experience, integrate Socket.IO on both client and server:
+  - Emit a `ride_request:created` event with `rideRequestId` and details when a request is created.
+  - Drivers should be subscribed to a room for their normalized `operatingArea` and vehicle family (e.g., `area:bahawalpur:car`).
+  - When a driver responds, emit a `ride_request:response` event to the rider's socket so the UI updates live.
+
+### POST /api/ride-requests/estimate
+- Role: Public
+- Content-Type: `application/json`
+- Body:
+  - `pickupLatitude` (number, required)
+  - `pickupLongitude` (number, required)
+  - `dropoffLatitude` (number, required)
+  - `dropoffLongitude` (number, required)
+  - `serviceArea` (string, optional) allowed: `city | out_of_city`
+- Response: 200
+  - `estimatedDistanceKm` (number)
+  - `serviceArea` (string)
+  - `fares` (object) — fare breakdown per vehicle type, each entry includes `totalFare`, `companyCommission`, `driverPayout`, `estimatedDistanceKm` and breakdown details returned by the fare calculator.
 
 ### POST /api/ride-requests
 - Role: Authenticated User (Rider)
@@ -178,37 +207,18 @@ This module handles rider trip requests and dispatches alerts to matching approv
 - Body:
   - `pickupLocation` (string, required)
   - `dropoffLocation` (string, required)
-  - `vehicleType` (string, required) allowed: `bike | car | auto | van`
-  - `offeredPrice` (number, required)
+  - `vehicleType` (string, required) allowed: `bike | rikshaw | car_without_ac | car_with_ac | business_car`
   - `pickupArea` (string, optional)
-  - `pickupLatitude` (number, optional)
-  - `pickupLongitude` (number, optional)
-  - `dropoffLatitude` (number, optional)
-  - `dropoffLongitude` (number, optional)
+  - `pickupLatitude` (number, required)
+  - `pickupLongitude` (number, required)
+  - `dropoffLatitude` (number, required)
+  - `dropoffLongitude` (number, required)
+  - `serviceArea` (string, optional) allowed: `city | out_of_city`
+  - `offeredPrice` (number, optional) — if provided, backend will accept this as the rider's offered price (recommended to be >= estimate).
   - `notes` (string, optional)
-- Dispatch behavior:
-  - Resolves target area:
-    - uses `pickupArea` when provided,
-    - otherwise auto-extracts from `pickupLocation` (last comma-separated segment).
-  - Applies generic normalization on both rider target area and driver `operatingArea`:
-    - lowercase conversion,
-    - punctuation removal,
-    - extra-space collapsing,
-    - accent/diacritic cleanup.
-  - This works for any city/area text format, not tied to a specific city.
-  - Example: `street one, goheer town, bahawalpur` resolves area as `bahawalpur`.
-  - Creates one `ride_request` record.
-  - Finds drivers with:
-    - approved registration (`driver_registrations.status = approved`)
-    - same `vehicleType`
-    - same normalized area (`operatingArea`)
-    - active + verified + `is_driver = true`
-  - Creates one `driver_ride_alert` record per matched driver.
-  - Sends email alert to matched drivers.
-  - Marks in-app/system delivery state in alert records.
 - Response: 201
   - `message`
-  - `rideRequest`
+  - `rideRequest` (ride details including `estimatedDistanceKm`, `offeredPrice`, `driverPayout`, `companyCommission`)
   - `dispatchedAlerts` (integer)
 
 ### GET /api/ride-requests/me
@@ -224,14 +234,33 @@ This module handles rider trip requests and dispatches alerts to matching approv
     - `inAppStatus`, `systemStatus`, `emailStatus`, `emailError`
     - `isRead`, `createdAt`, `updatedAt`
 
+### POST /api/ride-requests/:rideRequestId/driver/respond
+- Role: Authenticated User (Driver)
+- Content-Type: `application/json`
+- Body:
+  - `decision` (string, required) — allowed values: `interested` | `not_interested`
+  - `counterOfferPrice` (number, optional) — driver can increase price
+  - `message` (string, optional)
+- Response: 200
+  - `message`, `response` (response details, including `counterOfferPrice` if provided)
+
+### GET /api/ride-requests/:rideRequestId/responses
+- Role: Authenticated User (Rider)
+- Response: 200
+  - `rideRequestId`, `status`, `selectedDriverId`, `responses` array with each driver response: `driverId`, `decision`, `counterOfferPrice`, `message`, timestamps
+
+### POST /api/ride-requests/:rideRequestId/select-driver/:driverId
+- Role: Authenticated User (Rider)
+- Action: sets the ride request `status = 'driver_selected'` and records `selectedDriverId` and `selectedAt`.
+- Response: 200
+  - `message`, `rideRequest`, `selectedResponse`
+
 ### PATCH /api/ride-requests/driver/alerts/:alertId
 - Role: Authenticated User (Driver)
 - Body:
   - `isRead` (boolean, required)
 - Response: 200
-  - `message`
-  - `alert` (updated)
-
+  - `message`, `alert` (updated)
 ---
 
 ## Admin

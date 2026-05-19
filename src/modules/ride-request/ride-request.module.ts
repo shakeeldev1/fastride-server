@@ -8,6 +8,7 @@ import { DriverRideAlert } from './entities/driver-ride-alert.entity';
 import { DriverRideResponse } from './entities/driver-ride-response.entity';
 import { RideRequest } from './entities/ride-request.entity';
 import { RideRequestService } from './services/ride-request.service';
+import { RideRequestGateway } from './ride-request.gateway';
 
 @Module({
   imports: [
@@ -21,6 +22,6 @@ import { RideRequestService } from './services/ride-request.service';
     AuthModule,
   ],
   controllers: [RideRequestController],
-  providers: [RideRequestService],
+  providers: [RideRequestService, RideRequestGateway],
 })
 export class RideRequestModule {}

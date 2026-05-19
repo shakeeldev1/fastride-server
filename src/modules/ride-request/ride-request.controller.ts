@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateRideRequestDto } from './dto/create-ride-request.dto';
 import { DriverRespondRideRequestDto } from './dto/driver-respond-ride-request.dto';
 import { MarkAlertReadDto } from './dto/mark-alert-read.dto';
+import { EstimateFareDto } from './dto/estimate-fare.dto';
 import { RideRequestService } from './services/ride-request.service';
 
 @Controller('api/ride-requests')
@@ -27,6 +28,12 @@ export class RideRequestController {
     @Body() dto: CreateRideRequestDto,
   ) {
     return this.rideRequestService.createRideRequest(req.user.id, dto);
+  }
+
+  @Post('estimate')
+  @HttpCode(200)
+  async estimateFare(@Body() dto: EstimateFareDto) {
+    return this.rideRequestService.estimateFare(dto);
   }
 
   @Get('me')
