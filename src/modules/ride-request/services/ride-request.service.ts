@@ -335,24 +335,6 @@ export class RideRequestService {
     };
   }
 
-    // Notify rider in real-time about this response
-    try {
-      const ride = await this.rideRequestRepository.findOne({ where: { id: rideRequestId } });
-      if (ride) {
-        this.gateway.notifyRiderResponse(ride.riderId, {
-          rideRequestId,
-          driverId,
-          decision: response.decision,
-          counterOfferPrice:
-            response.counterOfferPrice !== null ? Number(response.counterOfferPrice) : null,
-          message: response.message,
-          createdAt: response.createdAt,
-        });
-      }
-    } catch (err) {
-      console.warn('Realtime rider notify failed:', err);
-    }
-
   async getRideResponsesForRider(riderId: string, rideRequestId: string) {
     const rideRequest = await this.rideRequestRepository.findOne({
       where: { id: rideRequestId },

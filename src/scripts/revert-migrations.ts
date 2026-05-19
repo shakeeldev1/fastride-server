@@ -4,8 +4,8 @@ async function run() {
   try {
     await dataSource.initialize();
     console.log('DataSource initialized');
-    const result = await dataSource.undoLastMigration();
-    console.log('Reverted migration:', result ? 'success' : 'no migration to revert');
+    await dataSource.undoLastMigration();
+    console.log('Reverted last migration');
     await dataSource.destroy();
     process.exit(0);
   } catch (err) {
