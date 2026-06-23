@@ -1,5 +1,6 @@
 import { IsOptional, IsString, MinLength } from 'class-validator';
 
+
 export class UpdateProfileDto {
   @IsOptional()
   @IsString({ message: 'Name must be a string' })
