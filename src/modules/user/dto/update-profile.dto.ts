@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsPhoneNumber, MinLength } from 'class-validator';
+import { IsOptional, IsString, MinLength } from 'class-validator';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -32,6 +32,5 @@ export class UpdateProfileDto {
   country?: string;
 
   @IsOptional()
-  @IsPhoneNumber('IN', { message: 'Please provide a valid phone number' })
   phone?: string;
 }
