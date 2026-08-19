@@ -263,6 +263,51 @@ Notes on real-time behaviour:
   - `message`, `alert` (updated)
 ---
 
+## Payments (JazzCash)
+
+Ride fare payments are processed through JazzCash's Hosted Checkout Page (HCP). The rider's browser/webview is redirected to a JazzCash-hosted page (supports JazzCash wallet, debit/credit card, and bank account) and JazzCash POSTs the transaction result back to a server callback URL, which then redirects the rider to a frontend success/failure page.
+
+Flow:
+1. Rider calls `POST /api/payments/jazzcash/initiate` with the `rideRequestId` they want to pay for.
+2. Backend creates a `payments` record (`status = pending`) and returns a `checkoutUrl` plus a `fields` object (all `pp_*` parameters including the signed `pp_SecureHash`).
+3. Client auto-submits an HTML form (`POST` with all `fields`) to `checkoutUrl` — typically inside a WebView.
+4. Rider completes payment on the JazzCash page. JazzCash POSTs the result to our `pp_ReturnURL` (`/api/payments/jazzcash/callback`).
+5. Backend verifies `pp_SecureHash`, updates the payment record (`completed` if `pp_ResponseCode == "000"`, otherwise `failed`), and redirects the browser to the configured frontend success/failure URL with `paymentId`, `status`, and `txnRefNo` query params.
+6. Client can poll `GET /api/payments/jazzcash/:paymentId/status` to confirm the final state, or call `POST /api/payments/jazzcash/:paymentId/inquire` to force a live JazzCash status check (useful if the browser was closed before the callback landed).
+
+### POST /api/payments/jazzcash/initiate
+- Role: Authenticated User (Rider, must own the ride request)
+- Content-Type: `application/json`
+- Body:
+  - `rideRequestId` (string uuid, required)
+  - `description` (string, optional, max 100 chars)
+- Behavior: amount charged is `ride_requests.offeredPrice`. Rejects if the ride request doesn't belong to the caller, or already has a `completed` payment.
+- Response: 201
+  - `message`, `paymentId`, `txnRefNo`, `checkoutUrl`, `fields` (object of `pp_*` form fields to POST to `checkoutUrl`)
+
+### POST /api/payments/jazzcash/callback
+- Role: Public (called by JazzCash, not by app clients)
+- Content-Type: `application/x-www-form-urlencoded`
+- Action: verifies `pp_SecureHash`, updates the matching `payments` row by `pp_TxnRefNo`, and issues an HTTP redirect (302) to the frontend success/failure URL.
+
+### GET /api/payments/jazzcash/:paymentId/status
+- Role: Authenticated User (must own the payment)
+- Response: 200
+  - `payment` { `id`, `rideRequestId`, `riderId`, `provider`, `amount`, `currency`, `status`, `txnRefNo`, `jazzcashResponseCode`, `jazzcashResponseMessage`, `paidAt`, `createdAt`, `updatedAt` }
+
+### POST /api/payments/jazzcash/:paymentId/inquire
+- Role: Authenticated User (must own the payment)
+- Action: if the payment isn't already `completed`, calls JazzCash's Payment Inquiry API live and syncs the local status.
+- Response: 200
+  - `payment` (same shape as status endpoint)
+
+### GET /api/payments/ride/:rideRequestId
+- Role: Authenticated User (Rider, must own the ride request)
+- Response: 200
+  - `payments` array (all payment attempts for that ride request, latest first)
+
+---
+
 ## Admin
 
 > Admin-only endpoints require: 1) authentication with JWT, 2) the requesting user must have `is_admin = true`.
@@ -301,6 +346,7 @@ Notes on real-time behaviour:
 - `driver_registrations.operatingArea` is stored in normalized format for consistent matching.
 - `ride_requests` table includes: `id (uuid)`, `rider_id (uuid)`, `pickupLocation`, `dropoffLocation`, `vehicleType`, `offeredPrice`, optional coordinates (`pickupLatitude`, `pickupLongitude`, `dropoffLatitude`, `dropoffLongitude`), `notes`, `status`, `createdAt`, `updatedAt`.
 - `driver_ride_alerts` table includes: `id (uuid)`, `ride_request_id (uuid)`, `driver_id (uuid)`, `vehicleType`, `message`, `inAppStatus`, `systemStatus`, `emailStatus`, `emailError`, `isRead`, `createdAt`, `updatedAt`.
+- `payments` table includes: `id (uuid)`, `ride_request_id (uuid)`, `rider_id (uuid)`, `provider` (default `jazzcash`), `amount`, `currency` (default `PKR`), `status` (`pending | completed | failed`), `txn_ref_no` (unique), `bill_reference`, `jazzcash_response_code`, `jazzcash_response_message`, `jazzcash_retrieval_reference_no`, `jazzcash_auth_code`, `raw_callback_payload` (jsonb), `paid_at`, `createdAt`, `updatedAt`.
 
 ---
 
