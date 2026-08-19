@@ -20,6 +20,7 @@ import {
 import { EmailService } from '../../auth/services/email.service';
 import { DriverRegistration } from '../../driver-registration/entities/driver-registration.entity';
 import { User } from '../../user/entities/user.entity';
+import { WalletService } from '../../wallet/services/wallet.service';
 import { CreateRideRequestDto } from '../dto/create-ride-request.dto';
 import { DriverRespondRideRequestDto } from '../dto/driver-respond-ride-request.dto';
 import { DriverRideAlert } from '../entities/driver-ride-alert.entity';
@@ -44,6 +45,7 @@ export class RideRequestService {
     private readonly emailService: EmailService,
     private readonly gateway: RideRequestGateway,
     private readonly chatService: ChatService,
+    private readonly walletService: WalletService,
   ) {}
 
   async createRideRequest(riderId: string, dto: CreateRideRequestDto) {
@@ -505,6 +507,57 @@ export class RideRequestService {
     };
   }
 
+  async completeRideRequest(driverId: string, rideRequestId: string, paymentMethod: string) {
+    const rideRequest = await this.rideRequestRepository.findOne({
+      where: { id: rideRequestId },
+    });
+
+    if (!rideRequest) {
+      throw new NotFoundException('Ride request not found');
+    }
+
+    if (rideRequest.selectedDriverId !== driverId) {
+      throw new ForbiddenException('Only the selected driver can complete this ride');
+    }
+
+    if (rideRequest.status !== 'driver_selected') {
+      throw new BadRequestException('Ride must be in driver_selected status to be completed');
+    }
+
+    rideRequest.status = 'completed';
+    rideRequest.paymentMethod = paymentMethod;
+    rideRequest.completedAt = new Date();
+    await this.rideRequestRepository.save(rideRequest);
+
+    let walletResult: { balance: number } | null = null;
+
+    if (paymentMethod === 'cash') {
+      const commission = Number(rideRequest.companyCommission);
+
+      if (commission > 0) {
+        const result = await this.walletService.debitCashCommissionIfNotAlready(
+          driverId,
+          commission,
+          rideRequestId,
+          `Company commission for cash ride ${rideRequestId}`,
+        );
+
+        if (result) {
+          walletResult = { balance: result.balance };
+        }
+      }
+    }
+
+    return {
+      message:
+        paymentMethod === 'cash'
+          ? 'Ride marked completed. Commission deducted from your wallet.'
+          : 'Ride marked completed. Awaiting online payment from rider.',
+      rideRequest: this.formatRideRequest(rideRequest),
+      wallet: walletResult,
+    };
+  }
+
   async getChatMessages(userId: string, rideRequestId: string) {
     const ride = await this.rideRequestRepository.findOne({ where: { id: rideRequestId } });
 
@@ -573,6 +626,8 @@ export class RideRequestService {
       status: rideRequest.status,
       selectedDriverId: rideRequest.selectedDriverId,
       selectedAt: rideRequest.selectedAt,
+      paymentMethod: rideRequest.paymentMethod,
+      completedAt: rideRequest.completedAt,
       createdAt: rideRequest.createdAt,
       updatedAt: rideRequest.updatedAt,
     };

@@ -56,6 +56,14 @@ export class Payment {
   @Column({ name: 'paid_at', type: 'timestamp', nullable: true })
   paidAt!: Date | null;
 
+  // Computed and stored in application code (mirrors how otp_expires_at is
+  // handled) rather than derived from createdAt at read time — comparing a
+  // DB-generated now() timestamp column against a freshly computed
+  // Date.now() is unreliable across timezones with the pg driver's default
+  // "timestamp without time zone" parsing.
+  @Column({ name: 'expires_at', type: 'timestamp', nullable: true })
+  expiresAt!: Date | null;
+
   @CreateDateColumn({ type: 'timestamp' })
   createdAt!: Date;
 

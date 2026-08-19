@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { DriverRegistration } from '../driver-registration/entities/driver-registration.entity';
 import { RideRequest } from '../ride-request/entities/ride-request.entity';
 import { User } from '../user/entities/user.entity';
+import { WalletService } from '../wallet/services/wallet.service';
 import { ChangeUserRoleDto } from './dto/change-user-role.dto';
 
 @Injectable()
@@ -15,6 +16,7 @@ export class AdminService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(RideRequest)
     private readonly rideRequestRepository: Repository<RideRequest>,
+    private readonly walletService: WalletService,
   ) {}
 
   private parsePagination(page?: string, limit?: string) {
@@ -295,5 +297,17 @@ export class AdminService {
     await this.userRepository.remove(user);
 
     return { message: 'User deleted successfully' };
+  }
+
+  async listWithdrawals(status?: string) {
+    return this.walletService.listWithdrawals(status);
+  }
+
+  async completeWithdrawal(withdrawalId: string) {
+    return this.walletService.completeWithdrawal(withdrawalId);
+  }
+
+  async rejectWithdrawal(withdrawalId: string, reason?: string) {
+    return this.walletService.rejectWithdrawal(withdrawalId, reason);
   }
 }

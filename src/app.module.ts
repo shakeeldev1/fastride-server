@@ -13,6 +13,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { RideRequestModule } from './modules/ride-request/ride-request.module';
 import { UserModule } from './modules/user/user.module';
 import { PaymentModule } from './modules/payment/payment.module';
+import { WalletModule } from './modules/wallet/wallet.module';
 import { getBaseDatabaseConfig } from './config/database.config';
 
 dotenv.config();
@@ -40,6 +41,7 @@ dotenv.config();
     AdminModule,
     RideRequestModule,
     PaymentModule,
+    WalletModule,
   ],
   controllers: [AppController],
   providers: [AppService],

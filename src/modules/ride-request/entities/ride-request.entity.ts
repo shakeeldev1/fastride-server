@@ -65,6 +65,12 @@ export class RideRequest {
   @Column({ type: 'timestamp', nullable: true })
   selectedAt!: Date | null;
 
+  @Column({ name: 'payment_method', type: 'varchar', length: 20, nullable: true })
+  paymentMethod!: string | null;
+
+  @Column({ name: 'completed_at', type: 'timestamp', nullable: true })
+  completedAt!: Date | null;
+
   @CreateDateColumn({ type: 'timestamp' })
   createdAt!: Date;
 

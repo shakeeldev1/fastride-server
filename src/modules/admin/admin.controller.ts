@@ -84,4 +84,25 @@ export class AdminController {
   async deleteUser(@Param('id') userId: string) {
     return this.adminService.deleteUser(userId);
   }
+
+  @Get('wallet/withdrawals')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @HttpCode(200)
+  async listWithdrawals(@Query('status') status?: string) {
+    return this.adminService.listWithdrawals(status);
+  }
+
+  @Post('wallet/withdrawals/:id/complete')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @HttpCode(200)
+  async completeWithdrawal(@Param('id') id: string) {
+    return this.adminService.completeWithdrawal(id);
+  }
+
+  @Post('wallet/withdrawals/:id/reject')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @HttpCode(200)
+  async rejectWithdrawal(@Param('id') id: string, @Body() body: { reason?: string }) {
+    return this.adminService.rejectWithdrawal(id, body?.reason);
+  }
 }
