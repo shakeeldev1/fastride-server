@@ -10,6 +10,12 @@ import {
 } from 'class-validator';
 
 export class CreateRideRequestDto {
+  @IsString({ message: 'Payment method must be a string' })
+  @IsIn(['online', 'cash'], {
+    message: 'Payment method must be one of: online, cash',
+  })
+  paymentMethod!: string;
+
   @IsOptional()
   @IsString({ message: 'Pickup area must be a string' })
   @MinLength(2, { message: 'Pickup area must be at least 2 characters' })

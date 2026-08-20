@@ -10,7 +10,6 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { CompleteRideRequestDto } from './dto/complete-ride-request.dto';
 import { CreateRideRequestDto } from './dto/create-ride-request.dto';
 import { DriverRespondRideRequestDto } from './dto/driver-respond-ride-request.dto';
 import { MarkAlertReadDto } from './dto/mark-alert-read.dto';
@@ -110,13 +109,8 @@ export class RideRequestController {
   async completeRideRequest(
     @Request() req: any,
     @Param('rideRequestId') rideRequestId: string,
-    @Body() dto: CompleteRideRequestDto,
   ) {
-    return this.rideRequestService.completeRideRequest(
-      req.user.id,
-      rideRequestId,
-      dto.paymentMethod,
-    );
+    return this.rideRequestService.completeRideRequest(req.user.id, rideRequestId);
   }
 
   @Patch('driver/alerts/:alertId')

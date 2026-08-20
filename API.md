@@ -175,7 +175,7 @@ This module implements the Indrive-style request, bidding and acceptance flow. S
 - Rider enters pickup and dropoff locations in the app.
 - Frontend computes distance (Haversine) using coordinates and calls the backend `POST /api/ride-requests/estimate` to receive a professional fare breakdown for each vehicle type.
 - Frontend shows fares to the rider; the rider may optionally increase the offered price.
-- Rider selects a vehicle type and submits the ride request (`POST /api/ride-requests`). The request includes coordinates, selected vehicle type, and the (possibly adjusted) `offeredPrice`.
+- Rider selects a vehicle type **and a payment method (`online` or `cash`)**, then submits the ride request (`POST /api/ride-requests`). The request includes coordinates, selected vehicle type, payment method, and the (possibly adjusted) `offeredPrice`. The payment method is chosen once here by the rider and is fixed for the ride — the driver cannot change it.
 - Backend creates a `ride_request` record, finds matching approved drivers in the same normalized operating area, and creates a `driver_ride_alert` for each. Alerts are delivered via in-app/system/email. (Socket delivery may be used; see notes.)
 - Drivers targeted by the alert can respond with `interested` plus an optional `counterOfferPrice` (they may raise their price) using `POST /api/ride-requests/:rideRequestId/driver/respond`.
 - Rider fetches responses with `GET /api/ride-requests/:rideRequestId/responses` and sees all interested drivers and any counter-offers.
@@ -208,6 +208,7 @@ Notes on real-time behaviour:
   - `pickupLocation` (string, required)
   - `dropoffLocation` (string, required)
   - `vehicleType` (string, required) allowed: `bike | rikshaw | car_without_ac | car_with_ac | business_car`
+  - `paymentMethod` (string, required) allowed: `online | cash` — chosen by the rider here, up front. This is the only place it's set; it can't be changed by the driver later at ride completion.
   - `pickupArea` (string, optional)
   - `pickupLatitude` (number, required)
   - `pickupLongitude` (number, required)
@@ -218,7 +219,7 @@ Notes on real-time behaviour:
   - `notes` (string, optional)
 - Response: 201
   - `message`
-  - `rideRequest` (ride details including `estimatedDistanceKm`, `offeredPrice`, `driverPayout`, `companyCommission`)
+  - `rideRequest` (ride details including `estimatedDistanceKm`, `offeredPrice`, `driverPayout`, `companyCommission`, `paymentMethod`)
   - `dispatchedAlerts` (integer)
 
 ### GET /api/ride-requests/me
@@ -233,6 +234,7 @@ Notes on real-time behaviour:
     - `id`, `rideRequestId`, `driverId`, `vehicleType`, `message`
     - `inAppStatus`, `systemStatus`, `emailStatus`, `emailError`
     - `isRead`, `createdAt`, `updatedAt`
+    - `ride` (embedded summary) — includes `paymentMethod` (`online | cash`) so the driver knows upfront, before responding, whether they'll collect cash or get paid out online
 
 ### POST /api/ride-requests/:rideRequestId/driver/respond
 - Role: Authenticated User (Driver)
@@ -264,11 +266,9 @@ Notes on real-time behaviour:
 
 ### POST /api/ride-requests/:rideRequestId/complete
 - Role: Authenticated User (Driver, must be the ride's `selectedDriverId`)
-- Content-Type: `application/json`
-- Body:
-  - `paymentMethod` (string, required) allowed: `online | cash`
-- Precondition: ride must currently be `status = 'driver_selected'`.
-- Action: sets `status = 'completed'`, records `paymentMethod` and `completedAt`, then settles the driver's wallet:
+- Body: none — the driver has no input here. The payment method was already fixed by the rider at ride creation (`POST /api/ride-requests`); the driver cannot choose or override it.
+- Precondition: ride must currently be `status = 'driver_selected'` and must already have a valid `paymentMethod` set (always true for rides created after this change).
+- Action: sets `status = 'completed'` and `completedAt`, then settles the driver's wallet based on the ride's existing `paymentMethod`:
   - `cash`: the driver already collected the full fare by hand, so the company's cut (`companyCommission`) is immediately **debited** from the driver's wallet (`wallet_transactions.type = 'commission_debit'`). The wallet balance is allowed to go negative — a driver with insufficient balance simply carries a debt forward.
   - `online`: no wallet movement happens yet. The rider must separately pay via `POST /api/payments/jazzcash/initiate`; the driver's payout is credited only once that payment succeeds (see Payments section).
 - Response: 200
@@ -281,7 +281,7 @@ Notes on real-time behaviour:
 Ride fare payments are processed through JazzCash's Hosted Checkout Page (HCP). The rider's browser/webview is redirected to a JazzCash-hosted page (supports JazzCash wallet, debit/credit card, and bank account) and JazzCash POSTs the transaction result back to a server callback URL, which then redirects the rider to a frontend success/failure page.
 
 Flow:
-1. Driver must first call `POST /api/ride-requests/:rideRequestId/complete` with `paymentMethod: "online"` — payment cannot be initiated on a ride that's still `driver_selected`, and a ride already settled with `cash` can't be paid online.
+1. This flow only applies to rides where the rider chose `paymentMethod: "online"` at creation. The driver must first call `POST /api/ride-requests/:rideRequestId/complete` (no body) — payment cannot be initiated on a ride that's still `driver_selected`, and a ride created with `paymentMethod: "cash"` can't be paid online at all.
 2. Rider calls `POST /api/payments/jazzcash/initiate` with the `rideRequestId` they want to pay for.
 3. Backend creates a `payments` record (`status = pending`) and returns a `checkoutUrl` plus a `fields` object (all `pp_*` parameters including the signed `pp_SecureHash`). If the rider re-opens checkout for the same ride while an earlier attempt is still pending and unexpired, the **same** `paymentId`/`txnRefNo` is returned instead of minting a new one — this avoids the rider being charged twice for the same ride from two separate live checkout sessions.
 4. Client auto-submits an HTML form (`POST` with all `fields`) to `checkoutUrl` — typically inside a WebView.
@@ -413,7 +413,7 @@ Every driver has a running `wallet_balance` on their `users` row, backed by an a
 - `users` table includes: `id (uuid)`, `name`, `email`, `phone`, `password`, `is_email_verified`, `profile_picture_url`, `profile_picture_public_id`, `is_active`, `is_admin`, `is_driver`, `wallet_balance` (numeric, can be negative), `created_at`, `updated_at`.
 - `driver_registrations` table includes: `id (uuid)`, `user_id (uuid)`, `firstName`, `lastName`, `dateOfBirth`, `personalPictureUrl`, `personalPicturePublicId`, `licenseNumber`, `expirationDate`, `frontSideOfLicenseUrl`, `frontSideOfLicensePublicId`, `selfieWithDriverLicenseUrl`, `selfieWithDriverLicensePublicId`, `idNumber`, `cnicFrontUrl`, `cnicFrontPublicId`, `cnicBackUrl`, `cnicBackPublicId`, `photoOfVehicleUrl`, `photoOfVehiclePublicId`, `vehicleRegistrationCertificateUrl`, `vehicleRegistrationCertificatePublicId`, `backsideOfVehicleInformationUrl`, `backsideOfVehicleInformationPublicId`, `vehicleBrand`, `vehicleType`, `vehicleModel`, `vehicleColor`, `numberPlate`, `productionYear`, `status`, `createdAt`, `updatedAt`.
 - `driver_registrations.operatingArea` is stored in normalized format for consistent matching.
-- `ride_requests` table includes: `id (uuid)`, `rider_id (uuid)`, `pickupLocation`, `dropoffLocation`, `vehicleType`, `offeredPrice`, `companyCommission`, `driverPayout`, optional coordinates (`pickupLatitude`, `pickupLongitude`, `dropoffLatitude`, `dropoffLongitude`), `notes`, `status` (`open | driver_selected | completed`), `selected_driver_id`, `selectedAt`, `payment_method` (`online | cash`, set on completion), `completed_at`, `createdAt`, `updatedAt`.
+- `ride_requests` table includes: `id (uuid)`, `rider_id (uuid)`, `pickupLocation`, `dropoffLocation`, `vehicleType`, `offeredPrice`, `companyCommission`, `driverPayout`, optional coordinates (`pickupLatitude`, `pickupLongitude`, `dropoffLatitude`, `dropoffLongitude`), `notes`, `status` (`open | driver_selected | completed`), `selected_driver_id`, `selectedAt`, `payment_method` (`online | cash`, chosen by the rider at creation, fixed for the life of the ride), `completed_at`, `createdAt`, `updatedAt`.
 - `driver_ride_alerts` table includes: `id (uuid)`, `ride_request_id (uuid)`, `driver_id (uuid)`, `vehicleType`, `message`, `inAppStatus`, `systemStatus`, `emailStatus`, `emailError`, `isRead`, `createdAt`, `updatedAt`.
 - `payments` table includes: `id (uuid)`, `ride_request_id (uuid)`, `rider_id (uuid)`, `provider` (default `jazzcash`), `amount`, `currency` (default `PKR`), `status` (`pending | completed | failed | expired`), `txn_ref_no` (unique), `bill_reference`, `expires_at`, `jazzcash_response_code`, `jazzcash_response_message`, `jazzcash_retrieval_reference_no`, `jazzcash_auth_code`, `rawCallbackPayload` (jsonb), `paid_at`, `createdAt`, `updatedAt`.
 - `wallet_transactions` table includes: `id (uuid)`, `user_id (uuid)`, `type` (`ride_earning | commission_debit | withdrawal | withdrawal_rejected_refund`), `amount` (signed), `balance_after`, `ride_request_id (uuid, nullable)`, `description`, `status` (`completed | pending | rejected`), `rejection_reason`, `createdAt`, `updatedAt`. A unique constraint on `(ride_request_id, type)` guarantees at most one `ride_earning` and one `commission_debit` row per ride, which is what prevents double-crediting/double-debiting from a retried webhook or race.

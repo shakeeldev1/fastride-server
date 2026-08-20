@@ -101,6 +101,7 @@ export class RideRequestService {
       status: 'open',
       selectedDriverId: null,
       selectedAt: null,
+      paymentMethod: dto.paymentMethod,
     });
 
     await this.rideRequestRepository.save(rideRequest);
@@ -264,6 +265,7 @@ export class RideRequestService {
               pickupLongitude: ride.pickupLongitude !== null ? Number(ride.pickupLongitude) : null,
               dropoffLatitude: ride.dropoffLatitude !== null ? Number(ride.dropoffLatitude) : null,
               dropoffLongitude: ride.dropoffLongitude !== null ? Number(ride.dropoffLongitude) : null,
+              paymentMethod: ride.paymentMethod,
               status: ride.status,
               createdAt: ride.createdAt,
             }
@@ -507,7 +509,7 @@ export class RideRequestService {
     };
   }
 
-  async completeRideRequest(driverId: string, rideRequestId: string, paymentMethod: string) {
+  async completeRideRequest(driverId: string, rideRequestId: string) {
     const rideRequest = await this.rideRequestRepository.findOne({
       where: { id: rideRequestId },
     });
@@ -524,8 +526,15 @@ export class RideRequestService {
       throw new BadRequestException('Ride must be in driver_selected status to be completed');
     }
 
+    // The rider chose the payment method up front when creating the ride
+    // request; the driver has no say in it here.
+    const paymentMethod = rideRequest.paymentMethod;
+
+    if (paymentMethod !== 'online' && paymentMethod !== 'cash') {
+      throw new BadRequestException('Ride request has no valid payment method set');
+    }
+
     rideRequest.status = 'completed';
-    rideRequest.paymentMethod = paymentMethod;
     rideRequest.completedAt = new Date();
     await this.rideRequestRepository.save(rideRequest);
 
