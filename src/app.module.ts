@@ -12,8 +12,8 @@ import { DriverRegistrationModule } from './modules/driver-registration/driver-r
 import { AdminModule } from './modules/admin/admin.module';
 import { RideRequestModule } from './modules/ride-request/ride-request.module';
 import { UserModule } from './modules/user/user.module';
-import { PaymentModule } from './modules/payment/payment.module';
 import { WalletModule } from './modules/wallet/wallet.module';
+import { WalletTopUpModule } from './modules/wallet-top-up/wallet-top-up.module';
 import { getBaseDatabaseConfig } from './config/database.config';
 
 dotenv.config();
@@ -40,8 +40,8 @@ dotenv.config();
     DriverRegistrationModule,
     AdminModule,
     RideRequestModule,
-    PaymentModule,
     WalletModule,
+    WalletTopUpModule,
   ],
   controllers: [AppController],
   providers: [AppService],

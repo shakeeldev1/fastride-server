@@ -85,6 +85,18 @@ export class RideRequestGateway implements OnGatewayConnection, OnGatewayDisconn
     this.server.to(driverRoom).emit('ride_request:driver_assigned', payload);
   }
 
+  // Notify rider and (if one was selected) driver that a ride was cancelled
+  notifyRideCancelled(riderId: string, driverId: string | null, payload: any) {
+    const riderRoom = `rider:${riderId}`;
+    this.logger.log(`Emitting ride_request:cancelled to ${riderRoom}`);
+    this.server.to(riderRoom).emit('ride_request:cancelled', payload);
+
+    if (driverId) {
+      const driverRoom = `driver:${driverId}`;
+      this.server.to(driverRoom).emit('ride_request:cancelled', payload);
+    }
+  }
+
   // Add connected rider/driver sockets to chat room so they receive chat messages immediately
   async joinUsersToChatRoom(rideRequestId: string, riderId: string, driverId: string) {
     const room = `chat:ride:${rideRequestId}`;

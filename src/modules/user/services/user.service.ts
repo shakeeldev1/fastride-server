@@ -1,8 +1,15 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+  Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../entities/user.entity';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
+import { SetDriverPaymentMethodDto } from '../dto/set-driver-payment-method.dto';
 import { CloudinaryService } from './cloudinary.service';
 
 @Injectable()
@@ -54,6 +61,34 @@ export class UserService {
     this.logger.log(`Profile updated for user: ${userId}`);
     return {
       message: 'Profile updated successfully',
+      user: this.formatUserResponse(user),
+    };
+  }
+
+  /**
+   * Set the driver's JazzCash account details, shown to riders who pay
+   * online. Only available once the driver has been approved (is_driver is
+   * set together with driver_registrations.status = 'approved').
+   */
+  async setDriverPaymentMethod(userId: string, dto: SetDriverPaymentMethodDto) {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.is_driver) {
+      throw new ForbiddenException('Only approved drivers can add a payment method');
+    }
+
+    user.jazzcash_account_number = dto.jazzcashAccountNumber;
+    user.jazzcash_account_title = dto.jazzcashAccountTitle;
+
+    await this.userRepository.save(user);
+
+    this.logger.log(`Driver payment method set for user: ${userId}`);
+    return {
+      message: 'Payment method saved successfully',
       user: this.formatUserResponse(user),
     };
   }
@@ -208,6 +243,9 @@ export class UserService {
       profile_picture_url: user.profile_picture_url,
       is_email_verified: user.is_email_verified,
       is_active: user.is_active,
+      is_driver: user.is_driver,
+      jazzcash_account_number: user.jazzcash_account_number,
+      jazzcash_account_title: user.jazzcash_account_title,
       created_at: user.created_at,
       updated_at: user.updated_at,
     };

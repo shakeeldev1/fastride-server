@@ -103,6 +103,16 @@ export class RideRequestController {
     );
   }
 
+  @Post(':rideRequestId/cancel')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  async cancelRideRequest(
+    @Request() req: any,
+    @Param('rideRequestId') rideRequestId: string,
+  ) {
+    return this.rideRequestService.cancelRideRequest(req.user.id, rideRequestId);
+  }
+
   @Post(':rideRequestId/complete')
   @UseGuards(JwtAuthGuard)
   @HttpCode(200)

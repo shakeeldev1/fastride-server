@@ -5,8 +5,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Not, Repository } from 'typeorm';
 import { User } from '../../user/entities/user.entity';
+import { WalletHold } from '../entities/wallet-hold.entity';
 import { WalletTransaction } from '../entities/wallet-transaction.entity';
 
 @Injectable()
@@ -16,6 +17,8 @@ export class WalletService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(WalletTransaction)
     private readonly walletTransactionRepository: Repository<WalletTransaction>,
+    @InjectRepository(WalletHold)
+    private readonly walletHoldRepository: Repository<WalletHold>,
   ) {}
 
   private isUniqueViolation(error: unknown): boolean {
@@ -41,7 +44,7 @@ export class WalletService {
     rideRequestId?: string | null;
     description?: string | null;
     status?: string;
-    validateUnderLock?: (currentBalance: number) => void;
+    validateUnderLock?: (currentBalance: number, manager: EntityManager) => Promise<void> | void;
   }): Promise<{ balance: number; transaction: WalletTransaction }> {
     return this.userRepository.manager.transaction(async (manager) => {
       const userRepo = manager.getRepository(User);
@@ -60,7 +63,7 @@ export class WalletService {
       const currentBalance = Number(user.wallet_balance ?? 0);
 
       if (params.validateUnderLock) {
-        params.validateUnderLock(currentBalance);
+        await params.validateUnderLock(currentBalance, manager);
       }
 
       const newBalance = Number((currentBalance + params.signedAmount).toFixed(2));
@@ -154,7 +157,113 @@ export class WalletService {
     }
   }
 
-  async debitCashCommissionIfNotAlready(
+  /**
+   * Reserves `amount` (a ride's companyCommission) against a driver's
+   * available balance so they can't respond "interested" to more rides than
+   * their wallet can actually cover the commission for. Available balance is
+   * wallet_balance minus every other still-active hold for this driver, not
+   * just wallet_balance itself — a driver can have several concurrent holds
+   * outstanding while multiple riders are still deciding.
+   *
+   * Idempotent: re-affirming an already-active hold for the same
+   * (rideRequestId, driverId) is a no-op. Reactivating a previously released
+   * hold (driver declined then flipped back to interested) re-runs the
+   * eligibility check against the current balance rather than trusting the
+   * old one.
+   */
+  async createHoldIfEligible(driverId: string, rideRequestId: string, amount: number) {
+    if (amount <= 0) {
+      return null;
+    }
+
+    return this.userRepository.manager.transaction(async (manager) => {
+      const userRepo = manager.getRepository(User);
+      const holdRepo = manager.getRepository(WalletHold);
+
+      const existing = await holdRepo.findOne({ where: { driverId, rideRequestId } });
+
+      if (existing?.status === 'active') {
+        return existing;
+      }
+
+      const user = await userRepo
+        .createQueryBuilder('user')
+        .setLock('pessimistic_write')
+        .where('user.id = :id', { id: driverId })
+        .getOne();
+
+      if (!user) {
+        throw new NotFoundException('Driver not found');
+      }
+
+      const heldAmount = await this.getActiveHeldAmount(driverId, manager);
+      const available = Number(user.wallet_balance ?? 0) - heldAmount;
+
+      if (available < amount) {
+        throw new BadRequestException(
+          `Insufficient wallet balance to accept this ride. Required commission: Rs ${amount.toFixed(2)}, available: Rs ${available.toFixed(2)}`,
+        );
+      }
+
+      if (existing) {
+        existing.status = 'active';
+        existing.amount = amount.toFixed(2);
+        return holdRepo.save(existing);
+      }
+
+      return holdRepo.save(
+        holdRepo.create({ driverId, rideRequestId, amount: amount.toFixed(2), status: 'active' }),
+      );
+    });
+  }
+
+  /** Sum of a driver's still-active holds — funds reserved against accepted-but-not-yet-completed rides. */
+  private async getActiveHeldAmount(driverId: string, manager?: EntityManager): Promise<number> {
+    const holdRepo = manager ? manager.getRepository(WalletHold) : this.walletHoldRepository;
+
+    const { total } = await holdRepo
+      .createQueryBuilder('hold')
+      .select('COALESCE(SUM(hold.amount), 0)', 'total')
+      .where('hold.driverId = :driverId', { driverId })
+      .andWhere('hold.status = :status', { status: 'active' })
+      .getRawOne();
+
+    return Number(total ?? 0);
+  }
+
+  /** Releases a single driver's active hold on a ride (decline, or flip from interested). */
+  async releaseHold(driverId: string, rideRequestId: string) {
+    await this.walletHoldRepository.update(
+      { driverId, rideRequestId, status: 'active' },
+      { status: 'released' },
+    );
+  }
+
+  /** Frees every other interested driver's hold once one driver is selected for a ride. */
+  async releaseAllHoldsForRideExcept(rideRequestId: string, keepDriverId: string) {
+    await this.walletHoldRepository.update(
+      { rideRequestId, status: 'active', driverId: Not(keepDriverId) },
+      { status: 'released' },
+    );
+  }
+
+  /** Frees every active hold on a ride — used when a ride is cancelled before completion. */
+  async releaseAllHoldsForRide(rideRequestId: string) {
+    await this.walletHoldRepository.update(
+      { rideRequestId, status: 'active' },
+      { status: 'released' },
+    );
+  }
+
+  /**
+   * Debits a ride's commission exactly once (idempotent via the
+   * wallet_transactions UNIQUE (ride_request_id, type) constraint, same
+   * pattern as creditRideEarningIfNotAlready) and marks the matching hold as
+   * captured. Called for both cash and online rides now — the platform no
+   * longer skims a cut out of the payment itself, so commission is always a
+   * standalone wallet debit at completion.
+   */
+  async captureHoldAndDebitCommissionIfNotAlready(
     driverId: string,
     amount: number,
     rideRequestId: string,
@@ -165,13 +274,20 @@ export class WalletService {
     }
 
     try {
-      return await this.applyLedgerEntry({
+      const result = await this.applyLedgerEntry({
         userId: driverId,
         signedAmount: -Math.abs(amount),
         type: 'commission_debit',
         rideRequestId,
         description,
       });
+
+      await this.walletHoldRepository.update(
+        { driverId, rideRequestId, status: 'active' },
+        { status: 'captured' },
+      );
+
+      return result;
     } catch (error) {
       if (this.isUniqueViolation(error)) {
         return null;
@@ -197,14 +313,21 @@ export class WalletService {
   async getWalletSummary(userId: string) {
     const user = await this.requireDriver(userId);
 
-    const recentTransactions = await this.walletTransactionRepository.find({
-      where: { userId },
-      order: { createdAt: 'DESC' },
-      take: 20,
-    });
+    const [recentTransactions, heldBalance] = await Promise.all([
+      this.walletTransactionRepository.find({
+        where: { userId },
+        order: { createdAt: 'DESC' },
+        take: 20,
+      }),
+      this.getActiveHeldAmount(userId),
+    ]);
+
+    const balance = Number(user.wallet_balance ?? 0);
 
     return {
-      balance: Number(user.wallet_balance ?? 0),
+      balance,
+      heldBalance,
+      availableBalance: Number((balance - heldBalance).toFixed(2)),
       recentTransactions: recentTransactions.map((tx) => this.formatTransaction(tx)),
     };
   }
@@ -241,9 +364,19 @@ export class WalletService {
       type: 'withdrawal',
       description: 'Withdrawal request pending admin payout',
       status: 'pending',
-      validateUnderLock: (currentBalance) => {
-        if (amount > currentBalance) {
-          throw new BadRequestException('Withdrawal amount exceeds available wallet balance');
+      validateUnderLock: async (currentBalance, manager) => {
+        // A driver can't withdraw funds already reserved by an active hold
+        // for a ride they've accepted — otherwise the hold's whole purpose
+        // (guaranteeing the commission is still there at completion) breaks.
+        // This runs under the same row lock createHoldIfEligible acquires, so
+        // it can't race a concurrent hold being created.
+        const heldAmount = await this.getActiveHeldAmount(userId, manager);
+        const available = currentBalance - heldAmount;
+
+        if (amount > available) {
+          throw new BadRequestException(
+            'Withdrawal amount exceeds available wallet balance (some funds are held against accepted rides)',
+          );
         }
       },
     });

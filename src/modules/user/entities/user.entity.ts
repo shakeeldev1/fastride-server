@@ -68,6 +68,12 @@ export class User {
   @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
   wallet_balance!: string;
 
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  jazzcash_account_number!: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  jazzcash_account_title!: string | null;
+
   @CreateDateColumn({ type: 'timestamp' })
   created_at!: Date;
 

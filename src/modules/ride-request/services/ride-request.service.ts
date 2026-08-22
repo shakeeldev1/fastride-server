@@ -221,9 +221,27 @@ export class RideRequestService {
       order: { createdAt: 'DESC' },
     });
 
+    const driverIds = Array.from(
+      new Set(
+        rideRequests
+          .filter((ride) => ride.paymentMethod === 'online' && ride.selectedDriverId)
+          .map((ride) => ride.selectedDriverId as string),
+      ),
+    );
+
+    const driverById = new Map<string, User>();
+
+    if (driverIds.length > 0) {
+      const drivers = await this.userRepository.find({ where: { id: In(driverIds) } });
+      drivers.forEach((driver) => driverById.set(driver.id, driver));
+    }
+
     return {
       rideRequests: rideRequests.map((rideRequest) =>
-        this.formatRideRequest(rideRequest),
+        this.formatRideRequest(
+          rideRequest,
+          rideRequest.selectedDriverId ? driverById.get(rideRequest.selectedDriverId) : undefined,
+        ),
       ),
     };
   }
@@ -350,6 +368,17 @@ export class RideRequestService {
       throw new ForbiddenException('You are not targeted for this ride request');
     }
 
+    if (dto.decision === 'interested') {
+      // Throws if the driver's wallet can't cover this ride's commission —
+      // must happen before the response row is saved so an ineligible
+      // "interested" is never persisted.
+      await this.walletService.createHoldIfEligible(
+        driverId,
+        rideRequestId,
+        Number(rideRequest.companyCommission),
+      );
+    }
+
     const existingResponse = await this.driverRideResponseRepository.findOne({
       where: { rideRequestId, driverId },
     });
@@ -364,6 +393,10 @@ export class RideRequestService {
     response.message = dto.message ?? null;
 
     await this.driverRideResponseRepository.save(response);
+
+    if (dto.decision === 'declined') {
+      await this.walletService.releaseHold(driverId, rideRequestId);
+    }
 
     alert.isRead = true;
     alert.inAppStatus = 'opened';
@@ -475,6 +508,11 @@ export class RideRequestService {
     rideRequest.selectedAt = new Date();
     await this.rideRequestRepository.save(rideRequest);
 
+    // Every other driver who responded "interested" was never chosen — free
+    // up their held commission amount now rather than making them wait for
+    // this ride to complete.
+    await this.walletService.releaseAllHoldsForRideExcept(rideRequestId, driverId);
+
     // Notify rider and driver in real-time
     try {
       this.gateway.notifyDriverSelected(rideRequest.riderId, driverId, {
@@ -493,9 +531,11 @@ export class RideRequestService {
       console.warn('Failed to join users to chat room:', err);
     }
 
+    const selectedDriver = await this.userRepository.findOne({ where: { id: driverId } });
+
     return {
       message: 'Driver selected successfully',
-      rideRequest: this.formatRideRequest(rideRequest),
+      rideRequest: this.formatRideRequest(rideRequest, selectedDriver ?? undefined),
       selectedResponse: {
         id: chosenResponse.id,
         driverId: chosenResponse.driverId,
@@ -538,32 +578,69 @@ export class RideRequestService {
     rideRequest.completedAt = new Date();
     await this.rideRequestRepository.save(rideRequest);
 
+    // The rider now pays the driver directly (cash in hand, or a direct
+    // JazzCash transfer) for both payment methods — the platform never holds
+    // the fare, so commission is always just a wallet debit here.
     let walletResult: { balance: number } | null = null;
+    const commission = Number(rideRequest.companyCommission);
 
-    if (paymentMethod === 'cash') {
-      const commission = Number(rideRequest.companyCommission);
+    if (commission > 0) {
+      const result = await this.walletService.captureHoldAndDebitCommissionIfNotAlready(
+        driverId,
+        commission,
+        rideRequestId,
+        `Company commission for ${paymentMethod} ride ${rideRequestId}`,
+      );
 
-      if (commission > 0) {
-        const result = await this.walletService.debitCashCommissionIfNotAlready(
-          driverId,
-          commission,
-          rideRequestId,
-          `Company commission for cash ride ${rideRequestId}`,
-        );
-
-        if (result) {
-          walletResult = { balance: result.balance };
-        }
+      if (result) {
+        walletResult = { balance: result.balance };
       }
     }
 
     return {
-      message:
-        paymentMethod === 'cash'
-          ? 'Ride marked completed. Commission deducted from your wallet.'
-          : 'Ride marked completed. Awaiting online payment from rider.',
+      message: 'Ride marked completed. Commission deducted from your wallet.',
       rideRequest: this.formatRideRequest(rideRequest),
       wallet: walletResult,
+    };
+  }
+
+  async cancelRideRequest(riderId: string, rideRequestId: string) {
+    const rideRequest = await this.rideRequestRepository.findOne({
+      where: { id: rideRequestId },
+    });
+
+    if (!rideRequest) {
+      throw new NotFoundException('Ride request not found');
+    }
+
+    if (rideRequest.riderId !== riderId) {
+      throw new ForbiddenException('You can only cancel your own ride request');
+    }
+
+    if (rideRequest.status !== 'open' && rideRequest.status !== 'driver_selected') {
+      throw new BadRequestException('Ride request can no longer be cancelled');
+    }
+
+    rideRequest.status = 'cancelled';
+    rideRequest.cancelledAt = new Date();
+    await this.rideRequestRepository.save(rideRequest);
+
+    // Releases the selected driver's hold (if one had been made), or every
+    // interested driver's hold if no one had been selected yet.
+    await this.walletService.releaseAllHoldsForRide(rideRequestId);
+
+    try {
+      this.gateway.notifyRideCancelled(rideRequest.riderId, rideRequest.selectedDriverId, {
+        rideRequestId,
+        cancelledAt: rideRequest.cancelledAt,
+      });
+    } catch (err) {
+      console.warn('Realtime notify ride cancelled failed:', err);
+    }
+
+    return {
+      message: 'Ride request cancelled successfully',
+      rideRequest: this.formatRideRequest(rideRequest),
     };
   }
 
@@ -602,7 +679,15 @@ export class RideRequestService {
     };
   }
 
-  private formatRideRequest(rideRequest: RideRequest) {
+  private formatRideRequest(rideRequest: RideRequest, driver?: User) {
+    const driverPaymentDetails =
+      rideRequest.paymentMethod === 'online' && driver
+        ? {
+            jazzcashAccountNumber: driver.jazzcash_account_number,
+            jazzcashAccountTitle: driver.jazzcash_account_title,
+          }
+        : undefined;
+
     return {
       id: rideRequest.id,
       riderId: rideRequest.riderId,
@@ -637,8 +722,10 @@ export class RideRequestService {
       selectedAt: rideRequest.selectedAt,
       paymentMethod: rideRequest.paymentMethod,
       completedAt: rideRequest.completedAt,
+      cancelledAt: rideRequest.cancelledAt,
       createdAt: rideRequest.createdAt,
       updatedAt: rideRequest.updatedAt,
+      ...(driverPaymentDetails ? { driverPaymentDetails } : {}),
     };
   }
 

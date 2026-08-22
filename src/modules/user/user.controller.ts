@@ -14,6 +14,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UserService } from './services/user.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { SetDriverPaymentMethodDto } from './dto/set-driver-payment-method.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('api/users')
@@ -35,6 +36,16 @@ export class UserController {
     @Body() updateProfileDto: UpdateProfileDto,
   ) {
     return this.userService.updateProfile(req.user.id, updateProfileDto);
+  }
+
+  @Patch('driver/payment-method')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  async setDriverPaymentMethod(
+    @Request() req: any,
+    @Body() dto: SetDriverPaymentMethodDto,
+  ) {
+    return this.userService.setDriverPaymentMethod(req.user.id, dto);
   }
 
   @Post('profile-picture')

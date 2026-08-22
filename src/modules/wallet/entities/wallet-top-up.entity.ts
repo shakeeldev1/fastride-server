@@ -7,23 +7,19 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-@Entity('payments')
-export class Payment {
+@Entity('wallet_topups')
+export class WalletTopUp {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ name: 'ride_request_id', type: 'uuid' })
+  @Column({ name: 'user_id', type: 'uuid' })
   @Index()
-  rideRequestId!: string;
-
-  @Column({ name: 'rider_id', type: 'uuid' })
-  @Index()
-  riderId!: string;
+  userId!: string;
 
   @Column({ type: 'varchar', length: 20, default: 'jazzcash' })
   provider!: string;
 
-  @Column({ type: 'numeric', precision: 10, scale: 2 })
+  @Column({ type: 'numeric', precision: 12, scale: 2 })
   amount!: string;
 
   @Column({ type: 'varchar', length: 10, default: 'PKR' })
@@ -56,11 +52,6 @@ export class Payment {
   @Column({ name: 'paid_at', type: 'timestamp', nullable: true })
   paidAt!: Date | null;
 
-  // Computed and stored in application code (mirrors how otp_expires_at is
-  // handled) rather than derived from createdAt at read time — comparing a
-  // DB-generated now() timestamp column against a freshly computed
-  // Date.now() is unreliable across timezones with the pg driver's default
-  // "timestamp without time zone" parsing.
   @Column({ name: 'expires_at', type: 'timestamp', nullable: true })
   expiresAt!: Date | null;
 

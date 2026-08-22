@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { getJazzCashConfig, JazzCashConfig } from '../../../config/jazzcash.config';
+import { getJazzCashConfig, JazzCashConfig } from '../../config/jazzcash.config';
 
 export interface BuildHostedCheckoutParams {
   txnRefNo: string;

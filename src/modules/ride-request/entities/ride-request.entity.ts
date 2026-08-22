@@ -71,6 +71,9 @@ export class RideRequest {
   @Column({ name: 'completed_at', type: 'timestamp', nullable: true })
   completedAt!: Date | null;
 
+  @Column({ name: 'cancelled_at', type: 'timestamp', nullable: true })
+  cancelledAt!: Date | null;
+
   @CreateDateColumn({ type: 'timestamp' })
   createdAt!: Date;
 
