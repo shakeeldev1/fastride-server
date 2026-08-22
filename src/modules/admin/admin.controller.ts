@@ -3,6 +3,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { AdminService } from './admin.service';
 import { ChangeUserRoleDto } from './dto/change-user-role.dto';
+import { CreditDriverWalletDto } from './dto/credit-driver-wallet.dto';
 
 @Controller('api/admin')
 export class AdminController {
@@ -104,5 +105,15 @@ export class AdminController {
   @HttpCode(200)
   async rejectWithdrawal(@Param('id') id: string, @Body() body: { reason?: string }) {
     return this.adminService.rejectWithdrawal(id, body?.reason);
+  }
+
+  @Post('wallet/drivers/:id/credit')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @HttpCode(200)
+  async creditDriverWallet(
+    @Param('id') id: string,
+    @Body() creditDto: CreditDriverWalletDto,
+  ) {
+    return this.adminService.creditDriverWallet(id, creditDto.amount, creditDto.description);
   }
 }

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DriverRegistration } from '../driver-registration/entities/driver-registration.entity';
@@ -141,6 +141,7 @@ export class AdminService {
         'u.is_active',
         'u.is_admin',
         'u.is_driver',
+        'u.wallet_balance',
         'u.created_at',
       ])
       .orderBy('u.created_at', 'DESC')
@@ -309,5 +310,29 @@ export class AdminService {
 
   async rejectWithdrawal(withdrawalId: string, reason?: string) {
     return this.walletService.rejectWithdrawal(withdrawalId, reason);
+  }
+
+  async creditDriverWallet(driverId: string, amount: number, description?: string) {
+    const driver = await this.userRepository.findOne({ where: { id: driverId } });
+    if (!driver) {
+      throw new NotFoundException('Driver not found');
+    }
+    if (!driver.is_driver) {
+      throw new BadRequestException('User is not a driver');
+    }
+
+    const { balance } = await this.walletService.credit(
+      driverId,
+      amount,
+      'admin_manual_credit',
+      null,
+      description?.trim() || 'Manual balance credit by admin (testing)',
+    );
+
+    return {
+      message: 'Wallet credited successfully',
+      driverId,
+      balance,
+    };
   }
 }
