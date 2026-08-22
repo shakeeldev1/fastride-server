@@ -50,7 +50,7 @@ async function seedAdminUser(app: any) {
       return;
     }
 
-    // Check if admin already exists
+    // Check if admin already exists---
     const existingAdmin = await userRepository.findOne({
       where: { email: adminEmail },
     });
