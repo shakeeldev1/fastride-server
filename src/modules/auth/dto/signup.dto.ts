@@ -1,9 +1,12 @@
-import { IsEmail, IsString, MinLength, Matches } from 'class-validator';
+import { IsEmail, IsIn, IsString, MinLength, Matches } from 'class-validator';
 
 export class SignupDto {
   @IsString({ message: 'Name must be a string' })
   @MinLength(2, { message: 'Name must be at least 2 characters' })
   name!: string;
+
+  @IsIn(['male', 'female'], { message: 'Gender must be either male or female' })
+  gender!: 'male' | 'female';
 
   @IsEmail({}, { message: 'Please provide a valid email' })
   email!: string;

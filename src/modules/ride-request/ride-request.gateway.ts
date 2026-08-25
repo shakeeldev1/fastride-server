@@ -7,6 +7,7 @@ import { Repository } from 'typeorm';
 import { RideRequest } from './entities/ride-request.entity';
 import { User } from '../user/entities/user.entity';
 import { ChatService } from './services/chat.service';
+import { DriverLocationService } from './services/driver-location.service';
 
 @WebSocketGateway({ cors: { origin: '*' } })
 @Injectable()
@@ -23,6 +24,7 @@ export class RideRequestGateway implements OnGatewayConnection, OnGatewayDisconn
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly chatService: ChatService,
+    private readonly driverLocationService: DriverLocationService,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -58,15 +60,25 @@ export class RideRequestGateway implements OnGatewayConnection, OnGatewayDisconn
   }
 
   handleDisconnect(client: Socket) {
-    const uid = client.data?.user?.id ?? 'unknown';
+    const user = client.data?.user;
+    const uid = user?.id ?? 'unknown';
+
+    if (user?.is_driver) {
+      this.driverLocationService.clear(user.id);
+    }
+
     this.logger.log(`Socket disconnected: user=${uid}`);
   }
 
-  // Notify drivers in an area+vehicle room about a new ride request
-  notifyDrivers(area: string, vehicleFamily: string, payload: any) {
-    const room = `area:${area}:${vehicleFamily}`;
-    this.logger.log(`Emitting ride_request:created to room ${room}`);
-    this.server.to(room).emit('ride_request:created', payload);
+  // Notify a specific list of drivers (already filtered by gender + proximity
+  // upstream) about a new ride request, one driver room at a time.
+  notifyDrivers(driverIds: string[], payload: any) {
+    if (driverIds.length === 0) return;
+
+    this.logger.log(`Emitting ride_request:created to ${driverIds.length} matched driver(s)`);
+    for (const driverId of driverIds) {
+      this.server.to(`driver:${driverId}`).emit('ride_request:created', payload);
+    }
   }
 
   // Notify a specific rider (by userId) about a new driver response
@@ -141,6 +153,34 @@ export class RideRequestGateway implements OnGatewayConnection, OnGatewayDisconn
 
     client.join(room);
     this.logger.log(`Socket user=${user.id} joined room ${room}`);
+  }
+
+  // Drivers report their live GPS position while online so ride requests can
+  // be dispatched by proximity. Expected to be emitted every ~10-30s (or on
+  // significant movement) while the driver app is active/available.
+  @SubscribeMessage('driver:location:update')
+  handleDriverLocationUpdate(
+    @MessageBody() data: { lat: number; lng: number },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const user = client.data?.user;
+    if (!user?.is_driver) return;
+
+    const lat = data?.lat;
+    const lng = data?.lng;
+    const isValid =
+      typeof lat === 'number' &&
+      typeof lng === 'number' &&
+      Number.isFinite(lat) &&
+      Number.isFinite(lng) &&
+      lat >= -90 &&
+      lat <= 90 &&
+      lng >= -180 &&
+      lng <= 180;
+
+    if (!isValid) return;
+
+    this.driverLocationService.update(user.id, lat, lng);
   }
 
   @SubscribeMessage('leave')

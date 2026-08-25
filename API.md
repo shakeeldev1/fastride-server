@@ -21,6 +21,7 @@ This document lists server API endpoints, request/response fields, and role requ
   - `email` (string, required)
   - `phone` (string, required)
   - `password` (string, required)
+  - `gender` (string, required) — allowed: `male | female`. **New field, required as of this version.** Used for gender-based ride matching (see Ride Requests below) — collected for every account, rider or driver, since a rider's own gender is what drives which drivers get notified. Any client still calling this endpoint without `gender` will now get a 400.
 - Response: 201
   - `message` (string)
   - `user` { `id`, `name`, `email`, `phone` }
@@ -49,12 +50,12 @@ This document lists server API endpoints, request/response fields, and role requ
   - `email` (string, required)
   - `password` (string, required)
 - Response: 200
-  - `message`, `token` (JWT), `user` summary
+  - `message`, `token` (JWT), `user` summary — includes `id`, `name`, `email`, `phone`, `profile_picture_url`, `is_admin`, `is_driver`, `is_active`, `gender`
 
 ### GET /api/auth/me
 - Role: Authenticated User
 - Response: 200
-  - current user summary
+  - current user summary — includes `gender` (`male | female | null`)
 
 ### POST /api/auth/change-password
 - Role: Authenticated User
@@ -90,13 +91,14 @@ This document lists server API endpoints, request/response fields, and role requ
 ### GET /api/users/profile
 - Role: Authenticated User
 - Response: 200
-  - `id`, `name`, `email`, `phone`, `bio`, `address`, `city`, `state`, `postal_code`, `country`, `profile_picture_url`, `is_email_verified`, `is_active`, `is_driver`, `jazzcash_account_number`, `jazzcash_account_title`, `created_at`, `updated_at`
+  - `id`, `name`, `email`, `phone`, `bio`, `address`, `city`, `state`, `postal_code`, `country`, `profile_picture_url`, `is_email_verified`, `is_active`, `is_driver`, `gender` (`male | female | null` — `null` only for accounts created before this field existed), `jazzcash_account_number`, `jazzcash_account_title`, `created_at`, `updated_at`
 
 ### PATCH /api/users/profile
 - Role: Authenticated User
 - Content-Type: `application/json`
 - Body (all optional):
   - `name`, `bio`, `address`, `city`, `state`, `postal_code`, `country`, `phone`
+  - Note: `gender` is **not** editable here — it's set once at signup. If you need a "change gender" flow, that's a new endpoint to add, not currently supported.
 - Response: 200
   - `message`, `user` (updated summary)
 
@@ -188,7 +190,7 @@ This module implements the request → bid → acceptance → completion flow. *
 1. Rider enters pickup and dropoff locations in the app.
 2. Frontend computes distance (Haversine) using coordinates and calls `POST /api/ride-requests/estimate` to get a fare breakdown per vehicle type.
 3. Frontend shows fares to the rider; the rider may optionally increase the offered price, picks a vehicle type, and picks a **payment method** — `cash` (handed to the driver in person) or `online` (rider transfers directly to the driver's JazzCash account once one is selected — see step 7). This choice is made once, here, and cannot be changed later.
-4. Rider submits `POST /api/ride-requests` with all of the above. Backend creates the `ride_request` (`status = 'open'`), finds matching approved drivers in the same normalized operating area, and creates a `driver_ride_alert` for each (delivered in-app/system/email, and over Socket.IO — see notes below).
+4. Rider submits `POST /api/ride-requests` with all of the above. Backend creates the `ride_request` (`status = 'open'`), finds matching approved drivers (see **Ride Matching Rules** below — gender + live-location radius, with an area-text fallback), and creates a `driver_ride_alert` for each (delivered in-app/system/email, and over Socket.IO — see notes below).
 5. A targeted driver responds `interested` (optionally with a `counterOfferPrice`) or `declined` via `POST /api/ride-requests/:rideRequestId/driver/respond`. **Responding `interested` places a hold on that ride's `companyCommission` amount against the driver's wallet** — if the driver's available balance (`wallet_balance` minus every other still-active hold) can't cover it, the call fails with 400 and no response is recorded. This is why a driver needs wallet funds before they can keep accepting rides (see Wallet below).
 6. Rider fetches responses with `GET /api/ride-requests/:rideRequestId/responses`.
 7. Rider selects one driver via `POST /api/ride-requests/:rideRequestId/select-driver/:driverId` → `status = 'driver_selected'`. Every other interested driver's hold is released immediately (they weren't chosen, no reason to keep their funds tied up). If `paymentMethod = 'online'`, the response now includes `driverPaymentDetails` (the selected driver's JazzCash account number + title) — **this is the entire online-payment flow**: the app shows these details to the rider, and the rider sends the transfer themselves, outside the app. The backend never sees or confirms that transfer.
@@ -198,12 +200,32 @@ This module implements the request → bid → acceptance → completion flow. *
 
 Notes on real-time behaviour:
 - Integrate Socket.IO on both client and server for live updates:
-  - `ride_request:created` — emitted to a driver's `area:{normalizedArea}:{vehicleFamily}` room when a new request matches them.
+  - `ride_request:created` — emitted **directly to the matched driver's own `driver:{driverId}` room** when a new request matches them (see Ride Matching Rules below for who gets matched). This changed recently — it used to be a broadcast to a shared `area:{normalizedArea}:{vehicleFamily}` room; that room/event no longer carries ride requests.
   - `ride_request:response` — emitted to the rider when a driver responds.
   - `ride_request:driver_selected` (to rider) / `ride_request:driver_assigned` (to driver) — emitted when a driver is selected.
   - `ride_request:cancelled` — emitted to the rider and (if one was selected) the driver when the rider cancels.
   - `chat:message` — chat messages once the ride is `driver_selected` (see `GET /:rideRequestId/chat` below for history).
-  - Rooms: riders join `rider:{userId}`; drivers join `driver:{userId}` and `area:{normalizedArea}:{vehicleFamily}`.
+  - `driver:location:update` (driver app → server, not a broadcast) — see Ride Matching Rules below. This is the one event the driver app sends rather than listens for.
+  - Rooms: riders join `rider:{userId}`; drivers join `driver:{userId}`. **Every driver app must join its own `driver:{driverId}` room right after connecting/authenticating** (send `join` with `{ room: 'driver:<own driver id>' }`) — this is now the only channel `ride_request:created` is delivered on. A driver that never joins this room will only find out about new ride requests by polling `GET /api/ride-requests/driver/alerts`.
+
+### Ride Matching Rules
+
+A ride request is only dispatched to a driver if **both** of these hold:
+
+1. **Gender match** — if the rider has a `gender` on file, only drivers with the *same* `gender` are matched. (Riders with no `gender` set — old accounts predating this field — get unrestricted matching, same as before.)
+2. **Proximity match (5 km radius)** — the driver must have reported a live GPS position within the last **2 minutes** via the `driver:location:update` socket event (see below), and that position must be within **5 km** of the ride's pickup coordinates (haversine distance, same formula used for fare estimation).
+   - **Fallback:** if a driver hasn't sent a location update recently (e.g. an older app build, or just opened the app), they fall back to the previous behavior — matched by normalized operating-area text instead of GPS distance. This is a transitional safety net; once every driver app is sending live locations, this fallback effectively never triggers.
+
+**What the driver app must do to get precise, real-time ride requests:**
+1. Send `gender` at signup (see `POST /api/auth/signup` above).
+2. On socket connect, join `driver:{ownDriverId}` (existing `join` event, no change).
+3. While online/available for rides, emit `driver:location:update` every **~10-30 seconds** (or on significant movement):
+   ```json
+   { "lat": 31.5204, "lng": 74.3587 }
+   ```
+   No acknowledgement is sent back. Invalid payloads (missing/non-numeric/out-of-range `lat`/`lng`, or not a driver account) are silently ignored. There's no explicit "stop tracking" event — simply stop emitting, or disconnect the socket, and the driver's last known location expires automatically after 2 minutes and is cleared entirely on disconnect.
+
+Until an individual driver's app sends both of these, that driver still receives ride requests via the old area-text matching and the `driver_ride_alert` polling endpoint — this is not a hard cutover, so there's no "everyone breaks at once" risk during rollout.
 
 ### POST /api/ride-requests/estimate
 - Role: Public
@@ -451,7 +473,7 @@ Flow:
 ---
 
 ## Database Fields (high level)
-- `users` table includes: `id (uuid)`, `name`, `email`, `phone`, `password`, `is_email_verified`, `profile_picture_url`, `profile_picture_public_id`, `is_active`, `is_admin`, `is_driver`, `wallet_balance` (numeric), `jazzcash_account_number`, `jazzcash_account_title`, `created_at`, `updated_at`.
+- `users` table includes: `id (uuid)`, `name`, `email`, `phone`, `password`, `is_email_verified`, `profile_picture_url`, `profile_picture_public_id`, `is_active`, `is_admin`, `is_driver`, `gender` (`male | female`, nullable — `null` only for accounts created before this field existed), `wallet_balance` (numeric), `jazzcash_account_number`, `jazzcash_account_title`, `created_at`, `updated_at`.
 - `driver_registrations` table includes: `id (uuid)`, `user_id (uuid)`, `firstName`, `lastName`, `dateOfBirth`, `personalPictureUrl`, `personalPicturePublicId`, `licenseNumber`, `expirationDate`, `frontSideOfLicenseUrl`, `frontSideOfLicensePublicId`, `selfieWithDriverLicenseUrl`, `selfieWithDriverLicensePublicId`, `idNumber`, `cnicFrontUrl`, `cnicFrontPublicId`, `cnicBackUrl`, `cnicBackPublicId`, `photoOfVehicleUrl`, `photoOfVehiclePublicId`, `vehicleRegistrationCertificateUrl`, `vehicleRegistrationCertificatePublicId`, `backsideOfVehicleInformationUrl`, `backsideOfVehicleInformationPublicId`, `vehicleBrand`, `vehicleType`, `vehicleModel`, `vehicleColor`, `numberPlate`, `productionYear`, `status`, `createdAt`, `updatedAt`.
 - `driver_registrations.operatingArea` is stored in normalized format for consistent matching.
 - `ride_requests` table includes: `id (uuid)`, `rider_id (uuid)`, `pickupLocation`, `dropoffLocation`, `vehicleType`, `serviceArea`, `offeredPrice`, `estimatedDistanceKm`, `companyCommission`, `driverPayout`, optional coordinates (`pickupLatitude`, `pickupLongitude`, `dropoffLatitude`, `dropoffLongitude`), `notes`, `status` (`open | driver_selected | completed | cancelled`), `selected_driver_id`, `selectedAt`, `payment_method` (`online | cash`, chosen by the rider at creation, fixed for the life of the ride), `completed_at`, `cancelled_at`, `createdAt`, `updatedAt`.
@@ -461,6 +483,7 @@ Flow:
 - `wallet_holds` table includes: `id (uuid)`, `driver_id (uuid)`, `ride_request_id (uuid)`, `amount`, `status` (`active | released | captured`), `createdAt`, `updatedAt`. Unique on `(ride_request_id, driver_id)` — one hold per driver per ride.
 - `wallet_topups` table includes: `id (uuid)`, `user_id (uuid)`, `provider` (default `jazzcash`), `amount`, `currency` (default `PKR`), `status` (`pending | completed | failed | expired`), `txn_ref_no` (unique), `bill_reference`, `jazzcash_response_code`, `jazzcash_response_message`, `jazzcash_retrieval_reference_no`, `jazzcash_auth_code`, `raw_callback_payload` (jsonb), `paid_at`, `expires_at`, `createdAt`, `updatedAt` — same shape the old `payments` table used for ride payments.
 - `payments` table: still physically exists in the database (holds historical ride-payment records from before this change) but is no longer read or written by any current code path — safe to ignore going forward.
+- **Driver live location is not a database table.** It's held in an in-memory map on the server process (`driverId → { lat, lng, updatedAt }`), populated by the `driver:location:update` socket event and expiring after 2 minutes of inactivity (see Ride Matching Rules above). This means it does **not** survive a server restart/redeploy, and does **not** work correctly if the backend is ever scaled to multiple instances without adding a shared store (e.g. Redis) — worth knowing before that becomes a deployment change.
 
 ---
 
@@ -470,6 +493,31 @@ Flow:
 - Current alert channels are in-app/system/email. SMS can replace email in a future iteration without changing ride request creation contract.
 - For production, set `synchronize = false` for TypeORM migrations and use migrations to evolve schema safely.
 - Consider adding audit logs and email notifications when admin approves/rejects registrations.
+
+---
+
+## Gender & Proximity Ride Matching: What Changed, and What to Verify Before Shipping
+
+This is a new, breaking change to signup and to how ride requests are delivered — summarized here so the mobile integration doesn't miss it.
+
+**Breaking:**
+- `POST /api/auth/signup` now **requires** `gender` (`male | female`). Update the signup screen before shipping this backend version, or every signup call will start failing with 400.
+- `ride_request:created` is no longer broadcast to the `area:{normalizedArea}:{vehicleFamily}` socket room. It's now emitted only to the matched driver's own `driver:{driverId}` room. **If the driver app doesn't already join `driver:{driverId}` on connect, it will stop receiving real-time ride request pushes entirely** — it'll fall back to whatever polling of `GET /api/ride-requests/driver/alerts` the app already does, but that's not real-time. See Ride Matching Rules (under Ride Requests above) for the exact room name and the `join` event to send.
+
+**Added:**
+- `gender` field on `users`, returned by `POST /api/auth/login`, `GET /api/auth/me`, and `GET /api/users/profile`. Set once at signup; not currently editable via `PATCH /api/users/profile`.
+- New driver-app socket event `driver:location:update` (`{ lat, lng }`) — the driver app should emit this every ~10-30s while online, so ride requests can be matched by live proximity (5 km radius) instead of static operating-area text. Full details under Ride Matching Rules above.
+- Ride dispatch now filters by rider/driver gender match (when the rider has a gender on file) in addition to proximity.
+
+**Rollout behavior (not a hard cutover):**
+- Existing rider accounts with no `gender` set keep getting unrestricted (any-gender) matching — only riders with `gender` set trigger the filter.
+- Drivers who haven't started sending `driver:location:update` yet (old app builds) keep getting matched by the old operating-area text logic instead of GPS radius. Once every driver app sends live location, this fallback stops mattering.
+- Net effect: you can ship the backend first and roll out the updated driver/rider app afterward without an outage — matching just stays coarser (area-text, any-gender) for whichever side hasn't updated yet.
+
+**Not yet verified in this change (please confirm before relying on it in production):**
+- This was written and confirmed to compile (`npm run build`) cleanly, but has **not** been exercised against a real running database with live socket clients — there's no driver app in this repo to test against. Before shipping, verify end-to-end with a real Flutter build: two test driver accounts (one male, one female) both online near a pickup point, a rider account with a gender set, confirm only the matching-gender driver receives `ride_request:created`; then move one driver's reported location outside the 5 km radius and confirm they stop being matched.
+- Run `npm run migration:run` against whichever database you're testing/deploying against — this change ships a new migration (`AddGenderToUsers`) adding `users.gender`. Production runs with `synchronize: false`, so this column doesn't exist there until the migration runs.
+- Confirm the driver app actually joins `driver:{driverId}` on every connect/reconnect (not just after being selected for a ride) — this is the one behavior change most likely to silently break real-time dispatch if missed, since the app would otherwise still work fine for everything except receiving new ride pushes.
 
 ---
 

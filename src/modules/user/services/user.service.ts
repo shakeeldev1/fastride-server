@@ -244,6 +244,7 @@ export class UserService {
       is_email_verified: user.is_email_verified,
       is_active: user.is_active,
       is_driver: user.is_driver,
+      gender: user.gender,
       jazzcash_account_number: user.jazzcash_account_number,
       jazzcash_account_title: user.jazzcash_account_title,
       created_at: user.created_at,

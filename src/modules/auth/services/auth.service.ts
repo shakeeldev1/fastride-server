@@ -33,7 +33,7 @@ export class AuthService {
    * Sign up a new user
    */
   async signup(signupDto: SignupDto) {
-    const { email, phone, password, name } = signupDto;
+    const { email, phone, password, name, gender } = signupDto;
 
     // Check if user already exists
     const existingUser = await this.userRepository.findOne({
@@ -59,6 +59,7 @@ export class AuthService {
       email,
       phone,
       password: hashedPassword,
+      gender,
       otp,
       otp_expires_at,
       is_email_verified: false,
@@ -208,6 +209,7 @@ export class AuthService {
         is_admin: user.is_admin,
         is_driver: user.is_driver,
         is_active: user.is_active,
+        gender: user.gender,
       },
     };
   }
@@ -334,6 +336,7 @@ export class AuthService {
       is_active: user.is_active,
       is_admin: user.is_admin,
       is_driver: user.is_driver,
+      gender: user.gender,
       created_at: user.created_at,
     };
   }

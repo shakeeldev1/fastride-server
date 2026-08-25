@@ -28,6 +28,10 @@ import { DriverRideResponse } from '../entities/driver-ride-response.entity';
 import { RideRequest } from '../entities/ride-request.entity';
 import { RideRequestGateway } from '../ride-request.gateway';
 import { ChatService } from './chat.service';
+import { DriverLocationService } from './driver-location.service';
+
+// Ride requests only go to drivers currently within this radius of pickup.
+const RIDE_MATCH_RADIUS_KM = 5;
 
 @Injectable()
 export class RideRequestService {
@@ -46,6 +50,7 @@ export class RideRequestService {
     private readonly gateway: RideRequestGateway,
     private readonly chatService: ChatService,
     private readonly walletService: WalletService,
+    private readonly driverLocationService: DriverLocationService,
   ) {}
 
   async createRideRequest(riderId: string, dto: CreateRideRequestDto) {
@@ -114,29 +119,15 @@ export class RideRequestService {
     });
 
     console.log(
-      `[Ride Alert] Searching drivers: vehicleFamily=${this.resolveDriverVehicleFamily(dto.vehicleType)}, targetArea=${targetArea}, totalCandidates=${candidateDriverRegs.length}`,
+      `[Ride Alert] Searching drivers: vehicleFamily=${this.resolveDriverVehicleFamily(dto.vehicleType)}, riderGender=${rider.gender ?? 'unset'}, totalCandidates=${candidateDriverRegs.length}`,
     );
 
-    const targetDriverRegs = candidateDriverRegs.filter((driverReg) => {
-      const driverNormalizedArea = normalizeAreaText(driverReg.operatingArea);
-      const isMatch = this.areasMatch(driverNormalizedArea, targetArea);
+    const pickupLatitude = Number(rideRequest.pickupLatitude);
+    const pickupLongitude = Number(rideRequest.pickupLongitude);
 
-      if (!isMatch) {
-        console.log(
-          `[Ride Alert] Driver ${driverReg.firstName} ${driverReg.lastName}: operatingArea="${driverReg.operatingArea}" normalizes to "${driverNormalizedArea}", expected "${targetArea}" - MISMATCH`,
-        );
-      }
+    const matchedDrivers: { driver: User; distanceKm: number | null }[] = [];
 
-      return isMatch;
-    });
-
-    console.log(
-      `[Ride Alert] Found ${targetDriverRegs.length} drivers in target area (${targetArea}) after vehicle family + area filtering`,
-    );
-
-    const alerts: DriverRideAlert[] = [];
-
-    for (const driverReg of targetDriverRegs) {
+    for (const driverReg of candidateDriverRegs) {
       const driver = await this.userRepository.findOne({
         where: {
           id: driverReg.userId,
@@ -147,17 +138,52 @@ export class RideRequestService {
       });
 
       if (!driver) {
-        console.log(
-          `[Ride Alert] Driver ${driverReg.firstName} ${driverReg.lastName}: user record check failed (not found or not active/verified)`,
-        );
         continue;
       }
 
-      console.log(
-        `[Ride Alert] Creating alert for driver ${driver.name} (${driver.id}) in area ${targetArea}`,
-      );
+      // Gender match is only enforced once the rider has a gender on file —
+      // legacy rider accounts without one keep the old unrestricted behavior.
+      if (rider.gender && driver.gender !== rider.gender) {
+        continue;
+      }
 
-      const alertMessage = `New ${dto.vehicleType} ride request from ${dto.pickupLocation} to ${dto.dropoffLocation}. Offered price: ${fareBreakdown.totalFare}`;
+      const liveLocation = this.driverLocationService.getFresh(driver.id);
+      let distanceKm: number | null = null;
+
+      if (liveLocation) {
+        distanceKm = calculateDistanceKm({
+          pickupLatitude,
+          pickupLongitude,
+          dropoffLatitude: liveLocation.lat,
+          dropoffLongitude: liveLocation.lng,
+        });
+
+        if (distanceKm > RIDE_MATCH_RADIUS_KM) {
+          continue;
+        }
+      } else {
+        // Driver hasn't reported a live GPS position yet (e.g. an older app
+        // build) — fall back to the legacy operating-area text match so
+        // dispatch doesn't go dark for them during rollout.
+        const driverNormalizedArea = normalizeAreaText(driverReg.operatingArea);
+        if (!this.areasMatch(driverNormalizedArea, targetArea)) {
+          continue;
+        }
+      }
+
+      matchedDrivers.push({ driver, distanceKm });
+    }
+
+    console.log(
+      `[Ride Alert] Matched ${matchedDrivers.length} driver(s) after gender + proximity filtering`,
+    );
+
+    const alerts: DriverRideAlert[] = [];
+    const notifiedDriverIds: string[] = [];
+
+    for (const { driver, distanceKm } of matchedDrivers) {
+      const distanceSuffix = distanceKm !== null ? ` (${distanceKm.toFixed(1)} km away)` : '';
+      const alertMessage = `New ${dto.vehicleType} ride request from ${dto.pickupLocation} to ${dto.dropoffLocation}${distanceSuffix}. Offered price: ${fareBreakdown.totalFare}`;
 
       const alert = this.driverRideAlertRepository.create({
         rideRequestId: rideRequest.id,
@@ -189,12 +215,12 @@ export class RideRequestService {
 
       await this.driverRideAlertRepository.save(alert);
       alerts.push(alert);
+      notifiedDriverIds.push(driver.id);
     }
 
-    // Emit real-time event to drivers in the area+vehicle family room
+    // Emit a real-time event directly to each matched driver's own room
     try {
-      const vehicleFamily = this.resolveDriverVehicleFamily(dto.vehicleType);
-      this.gateway.notifyDrivers(targetArea, vehicleFamily, {
+      this.gateway.notifyDrivers(notifiedDriverIds, {
         rideRequestId: rideRequest.id,
         pickupLocation: dto.pickupLocation,
         dropoffLocation: dto.dropoffLocation,

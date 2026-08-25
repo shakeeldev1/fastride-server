@@ -65,6 +65,9 @@ export class User {
   @Column({ type: 'boolean', default: false })
   is_driver!: boolean;
 
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  gender!: 'male' | 'female' | null;
+
   @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
   wallet_balance!: string;
 
