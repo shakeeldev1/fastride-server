@@ -145,41 +145,54 @@ This document lists server API endpoints, request/response fields, and role requ
 - Content-Type: `multipart/form-data`
 - Text fields (body):
   - `vehicleType` (string, required) allowed: `bike | car | auto | van`
-  - `firstName` (string, required)
-  - `lastName` (string, required)
-  - `dateOfBirth` (ISO date string, required)
+  - `operatingArea` (string, required)
+  - `firstName` (string, **optional**) — the account's own `name` (from signup) is the reliable source for display; only collect this if you want to let the driver specify a different registered name.
+  - `lastName` (string, **optional**)
+  - `dateOfBirth` (ISO date string, **optional**)
   - `licenseNumber` (string, required)
   - `expirationDate` (ISO date string, required)
   - `idNumber` (string, required)
-  - `vehicleBrand` (string, required)
+  - `vehicleBrand` (string, **optional**)
   - `vehicleModel` (string, required)
-  - `vehicleColor` (string, required)
+  - `vehicleColor` (string, **optional**)
   - `numberPlate` (string, required)
   - `productionYear` (integer, required)
 
 - File fields (multipart):
   - `personalPicture` (image, required)
   - `frontSideOfLicense` (image, required)
-  - `selfieWithDriverLicense` (image, required)
+  - `selfieWithDriverLicense` (image, **optional**)
   - `cnicFront` (image, required)
   - `cnicBack` (image, required)
-  - `photoOfVehicle` (image, required)
-  - `vehicleRegistrationCertificate` (image, required)
-  - `backsideOfVehicleInformation` (image, required)
+  - `photoOfVehicle` (image, **optional**)
+  - `vehicleRegistrationCertificate` (image, **optional**)
+  - `backsideOfVehicleInformation` (image, **optional**)
+
+  **Simplified as of this version** — the fields marked optional above used to be required. This was a deliberate product decision to reduce signup friction; omitted fields/files are simply stored as `null`. If you're building a new registration screen, you can leave these out of the initial flow entirely (see "What Changed" note below) — there is currently no follow-up endpoint to fill them in later (unlike the police certificate, which does have one — see next endpoint).
 
 - Response: 201
   - `message`
-  - `driverRegistration` object (summary including `status` set to `pending`)
+  - `driverRegistration` object (summary including `status` set to `pending`; any omitted optional field/file comes back as `null`)
+
+### POST /api/driver-registration/police-certificate
+- Role: Authenticated User (must already have a driver registration — any status, not just `approved`)
+- Content-Type: `multipart/form-data`
+- File field: `policeCertificate` (required) — image (JPEG/PNG/WebP/GIF) or PDF
+- Purpose: a police character certificate is **never** collected at registration time. The driver (or their agent) uploads it whenever they have it ready — same day, 15 days later, a month later, whenever — by calling this endpoint on its own. There's no deadline enforced by the backend.
+- Response: 200
+  - `message`, `driverRegistration` object (now including `policeCertificateUrl`)
+- Errors: 404 if the caller has no driver registration yet — complete `POST /api/driver-registration` first.
 
 ### GET /api/driver-registration/me
 - Role: Authenticated User
 - Response: 200
-  - `driverRegistration` object (detailed)
+  - `driverRegistration` object (detailed) — now also includes `policeCertificateUrl` (`null` until uploaded via the endpoint above)
 
 Notes:
 - Uploaded images are stored via Cloudinary; stored fields include `_Url` and `_PublicId` for each uploaded file in the `driver_registrations` table.
 - A user can have at most one driver registration (unique on `user_id`).
 - Once an admin approves the registration (`users.is_driver = true`), the driver should be prompted to set up their JazzCash payout details (`PATCH /api/users/driver/payment-method`) and, if they intend to accept rides, top up their wallet (see Wallet Top-Up below) — a driver with `0` wallet balance cannot respond `interested` to any ride that has a non-zero commission.
+- `GET /api/admin/driver-registrations` and `GET /api/admin/driver-registrations/:id` now also embed a `user: { id, name, email, phone }` object on each registration — that's the admin dashboard's fallback for displaying a driver's name when `firstName`/`lastName` weren't collected.
 
 ---
 
@@ -202,10 +215,11 @@ Notes on real-time behaviour:
 - Integrate Socket.IO on both client and server for live updates:
   - `ride_request:created` — emitted **directly to the matched driver's own `driver:{driverId}` room** when a new request matches them (see Ride Matching Rules below for who gets matched). This changed recently — it used to be a broadcast to a shared `area:{normalizedArea}:{vehicleFamily}` room; that room/event no longer carries ride requests.
   - `ride_request:response` — emitted to the rider when a driver responds.
-  - `ride_request:driver_selected` (to rider) / `ride_request:driver_assigned` (to driver) — emitted when a driver is selected.
+  - `ride_request:driver_selected` (to rider) / `ride_request:driver_assigned` (to driver) — emitted when a driver is selected. Now also carries pickup/dropoff coordinates — see Ride Matching Rules below.
   - `ride_request:cancelled` — emitted to the rider and (if one was selected) the driver when the rider cancels.
   - `chat:message` — chat messages once the ride is `driver_selected` (see `GET /:rideRequestId/chat` below for history).
   - `driver:location:update` (driver app → server, not a broadcast) — see Ride Matching Rules below. This is the one event the driver app sends rather than listens for.
+  - `driver:location` / `driver:location:snapshot` / `tracking:room_ready` — live GPS tracking for the rider once a driver is selected. See **Live Location Tracking** below.
   - Rooms: riders join `rider:{userId}`; drivers join `driver:{userId}`. **Every driver app must join its own `driver:{driverId}` room right after connecting/authenticating** (send `join` with `{ room: 'driver:<own driver id>' }`) — this is now the only channel `ride_request:created` is delivered on. A driver that never joins this room will only find out about new ride requests by polling `GET /api/ride-requests/driver/alerts`.
 
 ### Ride Matching Rules
@@ -223,9 +237,65 @@ A ride request is only dispatched to a driver if **both** of these hold:
    ```json
    { "lat": 31.5204, "lng": 74.3587 }
    ```
-   No acknowledgement is sent back. Invalid payloads (missing/non-numeric/out-of-range `lat`/`lng`, or not a driver account) are silently ignored. There's no explicit "stop tracking" event — simply stop emitting, or disconnect the socket, and the driver's last known location expires automatically after 2 minutes and is cleared entirely on disconnect.
+   No acknowledgement is sent back. Invalid payloads (missing/non-numeric/out-of-range `lat`/`lng`, or not a driver account) are silently ignored. There's no explicit "stop tracking" event — simply stop emitting, or disconnect the socket, and the driver's last known location expires automatically after 2 minutes and is cleared entirely on disconnect. Sending this event also drives the live-tracking broadcast described below.
 
 Until an individual driver's app sends both of these, that driver still receives ride requests via the old area-text matching and the `driver_ride_alert` polling endpoint — this is not a hard cutover, so there's no "everyone breaks at once" risk during rollout.
+
+**`ride_request:created` payload** (emitted per-driver, so `driverLatitude`/`driverLongitude`/`distanceToPickupKm`/`driverLocationUpdatedAt` differ per recipient and are `null` for a driver matched via the area-text fallback instead of GPS):
+```json
+{
+  "rideRequestId": "ride-id",
+  "pickupLocation": "Pickup address",
+  "dropoffLocation": "Destination address",
+  "pickupLatitude": 31.5204,
+  "pickupLongitude": 74.3587,
+  "vehicleType": "car_with_ac",
+  "offeredPrice": 1200,
+  "estimatedDistanceKm": 8.4,
+  "driverLatitude": 31.515,
+  "driverLongitude": 74.35,
+  "distanceToPickupKm": 1.7,
+  "driverLocationUpdatedAt": "2026-08-28T12:00:00.000Z"
+}
+```
+The same `distanceToPickupKm` (computed live against the driver's *current* position, so it changes between polls as the driver moves) is also included on each entry's `ride` object in `GET /api/ride-requests/driver/alerts` — see that endpoint below.
+
+### Live Location Tracking (Driver → Rider)
+
+Once a driver is selected, the rider's app can track their live position over Socket.IO — separate from chat, so GPS never rides through `chat:message`.
+
+**Room:** `tracking:ride:{rideRequestId}`. Only two people may ever be in it: the ride's rider (`ride.riderId`), and the currently-`selectedDriverId` — enforced server-side by looking up the ride in the database, not by trusting the client's claim. A ride with no driver selected yet has no one who can join this room (there's nothing to track).
+
+**Joining:**
+- **Automatic:** the moment a driver is selected (`POST /.../select-driver/:driverId`), the backend joins both parties' *currently connected* sockets to the room itself — no client action needed if the app is already connected when selection happens.
+- **Manual (recommended: always do this too):** send `join` with `{ room: 'tracking:ride:<rideRequestId>' }`. Needed if the rider opens/reopens the tracking screen after selection (e.g. reconnected socket, backgrounded app) — the automatic join only catches sockets connected *at the moment of selection*.
+
+**Events:**
+- `driver:location` (broadcast to the room) — emitted every time the driver sends `driver:location:update`, for as long as the ride stays in `driver_selected` status:
+  ```json
+  {
+    "rideRequestId": "ride-id",
+    "driverId": "driver-id",
+    "lat": 31.5204,
+    "lng": 74.3587,
+    "updatedAt": "2026-08-28T12:00:00.000Z"
+  }
+  ```
+  This stops automatically once the ride is `completed` or `cancelled` (the backend looks up the driver's currently-`driver_selected` rides on every location update and only broadcasts to those — a finished ride is never matched again, nothing to unsubscribe from).
+- `driver:location:snapshot` — an initial/on-demand snapshot, sent (a) automatically right after a driver is selected, to the room, and (b) directly to a socket whenever it successfully joins a `tracking:ride:*` room (covers the rider opening the tracking screen after the driver's first GPS ping already happened). Two possible shapes:
+  ```json
+  { "rideRequestId": "ride-id", "driverId": "driver-id", "lat": 31.5204, "lng": 74.3587, "updatedAt": "2026-08-28T12:00:00.000Z" }
+  ```
+  or, if the driver has no location on record yet or it's older than 2 minutes:
+  ```json
+  { "rideRequestId": "ride-id", "available": false }
+  ```
+  Show "Driver location unavailable" in the UI until a `driver:location` event (or a snapshot with coordinates) arrives.
+- `tracking:room_ready` — `{ rideRequestId, room }`, emitted to both `rider:{riderId}` and `driver:{driverId}` right after the automatic join on selection (mirrors the existing `chat:room_ready` event).
+
+**Determining what the distance is *to* (pickup vs destination):** the backend does not emit separate events for "driving to pickup" vs "driving to destination" — it always sends the driver's raw coordinates plus `rideRequestId`. The app already knows the ride's current `status` (from `GET /api/ride-requests/me`, or the `ride_request:*` events) and its pickup/dropoff coordinates (from the ride object) — combine those three client-side to decide which point to measure distance against and what label to show.
+
+**Driver app note:** the driver side of this doesn't require any new event beyond the `driver:location:update` it already sends for matching (see Ride Matching Rules above) — one GPS ping now does double duty: it updates matching eligibility *and* feeds this rider-facing broadcast for whichever ride(s) that driver currently has `driver_selected`.
 
 ### POST /api/ride-requests/estimate
 - Role: Public
@@ -274,7 +344,7 @@ Until an individual driver's app sends both of these, that driver still receives
     - `id`, `rideRequestId`, `driverId`, `vehicleType`, `message`
     - `inAppStatus`, `systemStatus`, `emailStatus`, `emailError`
     - `isRead`, `createdAt`, `updatedAt`
-    - `ride` (embedded summary) — includes `paymentMethod` (`online | cash`) and `companyCommission`, so the driver's app can show upfront, before responding, both how they'll be paid and how much wallet balance responding `interested` will hold.
+    - `ride` (embedded summary) — includes `paymentMethod` (`online | cash`) and `companyCommission`, so the driver's app can show upfront, before responding, both how they'll be paid and how much wallet balance responding `interested` will hold. Also includes `distanceToPickupKm` — computed fresh on every call against the driver's *current* live location (`null` if the driver has no live location on record right now), so it changes between polls as the driver moves. Same figure `ride_request:created` reports in real time (see Ride Matching Rules above) — kept consistent so the UI doesn't show two different numbers depending on whether the driver saw the push or found the ride by polling.
 
 ### POST /api/ride-requests/:rideRequestId/driver/respond
 - Role: Authenticated User (Driver)
@@ -423,6 +493,43 @@ Flow:
 
 > Admin-only endpoints require: 1) authentication with JWT, 2) the requesting user must have `is_admin = true`.
 
+### GET /api/admin/dashboard/stats
+- Role: Admin
+- Response: 200
+  - `stats` { `totalUsers`, `totalActiveUsers`, `totalDrivers`, `totalRiders`, `totalAdmins`, `pendingDriverApprovals`, `totalRideRequests`, `openRideRequests`, `selectedRideRequests`, `completedRideRequests`, `cancelledRideRequests` }
+  - `recentRideRequests` (last 10), `recentUsers` (last 10, summary fields only)
+
+### GET /api/admin/users?role&status&search&page&limit
+- Role: Admin
+- Query params (all optional): `role` (`admin | driver | rider`), `status` (`active | inactive`), `search` (matches name/email/phone), `page` (default 1), `limit` (default 20, max 100)
+- Response: 200
+  - `users` array — each: `id`, `name`, `email`, `phone`, `is_active`, `is_admin`, `is_driver`, `wallet_balance`, `created_at`
+  - `pagination` { `page`, `limit`, `total`, `totalPages` }
+
+### PATCH /api/admin/users/:id/role
+- Role: Admin
+- Content-Type: `application/json`
+- Body (all optional): `is_admin` (boolean), `is_driver` (boolean), `is_active` (boolean) — only the fields you send are changed.
+- Action: this is also how an admin **activates/deactivates** a user (set `is_active`) and grants/revokes admin or driver access. Deactivating a user (`is_active: false`) does not delete anything — it's reversible by calling this again with `is_active: true`.
+- **Self-protection:** an admin cannot deactivate their own account (`is_active: false`) or remove their own admin access (`is_admin: false`) through this endpoint — both return 400. This exists so an admin can never accidentally lock themselves out with no other admin necessarily around to undo it. Every other combination on your own account (e.g. toggling your own `is_driver`) is still allowed.
+- Response: 200
+  - `message`, `user` { `id`, `name`, `email`, `is_admin`, `is_driver`, `is_active` }
+- Errors: 404 if the user doesn't exist; 400 for either self-protection case above.
+
+### DELETE /api/admin/users/:id
+- Role: Admin
+- Action: permanently deletes the user row. **This is not reversible** — there's no soft-delete/undo. If you just want to suspend someone, use `PATCH .../role` with `is_active: false` instead.
+- **Self-protection:** an admin cannot delete their own account — 400.
+- Response: 200
+  - `message`
+- Errors: 404 if the user doesn't exist; 400 if deleting your own account.
+
+### GET /api/admin/rides?status&search&page&limit
+- Role: Admin
+- Query params (all optional): `status` (`open | selected | completed | cancelled | all`), `search`, `page`, `limit`
+- Response: 200
+  - `rides` array, `summary` { `open`, `selected`, `completed`, `cancelled` }, `pagination` { `page`, `limit`, `total`, `totalPages` }
+
 ### GET /api/admin/driver-registrations?status={optional}
 - Role: Admin
 - Query params:
@@ -470,11 +577,22 @@ Flow:
 - Response: 200
   - `message`, `transaction` (updated)
 
+### POST /api/admin/wallet/drivers/:id/credit
+- Role: Admin
+- Content-Type: `application/json`
+- Body:
+  - `amount` (number, required, > 0, max 2 decimal places)
+  - `description` (string, optional) — defaults to `"Manual balance credit by admin (testing)"`
+- Action: manually credits a driver's wallet — mainly for testing (e.g. giving a test driver balance without going through JazzCash top-up). Recorded in `wallet_transactions` with `type = 'admin_manual_credit'`, through the same atomic ledger path top-ups use.
+- Response: 200
+  - `message`, `driverId`, `balance` (new wallet balance)
+- Errors: 404 if the target user doesn't exist; 400 if the target user isn't a driver (`is_driver = false`).
+
 ---
 
 ## Database Fields (high level)
 - `users` table includes: `id (uuid)`, `name`, `email`, `phone`, `password`, `is_email_verified`, `profile_picture_url`, `profile_picture_public_id`, `is_active`, `is_admin`, `is_driver`, `gender` (`male | female`, nullable — `null` only for accounts created before this field existed), `wallet_balance` (numeric), `jazzcash_account_number`, `jazzcash_account_title`, `created_at`, `updated_at`.
-- `driver_registrations` table includes: `id (uuid)`, `user_id (uuid)`, `firstName`, `lastName`, `dateOfBirth`, `personalPictureUrl`, `personalPicturePublicId`, `licenseNumber`, `expirationDate`, `frontSideOfLicenseUrl`, `frontSideOfLicensePublicId`, `selfieWithDriverLicenseUrl`, `selfieWithDriverLicensePublicId`, `idNumber`, `cnicFrontUrl`, `cnicFrontPublicId`, `cnicBackUrl`, `cnicBackPublicId`, `photoOfVehicleUrl`, `photoOfVehiclePublicId`, `vehicleRegistrationCertificateUrl`, `vehicleRegistrationCertificatePublicId`, `backsideOfVehicleInformationUrl`, `backsideOfVehicleInformationPublicId`, `vehicleBrand`, `vehicleType`, `vehicleModel`, `vehicleColor`, `numberPlate`, `productionYear`, `status`, `createdAt`, `updatedAt`.
+- `driver_registrations` table includes: `id (uuid)`, `user_id (uuid)`, `firstName` (nullable), `lastName` (nullable), `dateOfBirth` (nullable), `personalPictureUrl`, `personalPicturePublicId`, `licenseNumber`, `expirationDate`, `frontSideOfLicenseUrl`, `frontSideOfLicensePublicId`, `selfieWithDriverLicenseUrl` (nullable), `selfieWithDriverLicensePublicId` (nullable), `idNumber`, `cnicFrontUrl`, `cnicFrontPublicId`, `cnicBackUrl`, `cnicBackPublicId`, `photoOfVehicleUrl` (nullable), `photoOfVehiclePublicId` (nullable), `vehicleRegistrationCertificateUrl` (nullable), `vehicleRegistrationCertificatePublicId` (nullable), `backsideOfVehicleInformationUrl` (nullable), `backsideOfVehicleInformationPublicId` (nullable), `policeCertificateUrl` (nullable), `policeCertificatePublicId` (nullable), `vehicleBrand` (nullable), `vehicleType`, `vehicleModel`, `vehicleColor` (nullable), `numberPlate`, `productionYear`, `status`, `createdAt`, `updatedAt`.
 - `driver_registrations.operatingArea` is stored in normalized format for consistent matching.
 - `ride_requests` table includes: `id (uuid)`, `rider_id (uuid)`, `pickupLocation`, `dropoffLocation`, `vehicleType`, `serviceArea`, `offeredPrice`, `estimatedDistanceKm`, `companyCommission`, `driverPayout`, optional coordinates (`pickupLatitude`, `pickupLongitude`, `dropoffLatitude`, `dropoffLongitude`), `notes`, `status` (`open | driver_selected | completed | cancelled`), `selected_driver_id`, `selectedAt`, `payment_method` (`online | cash`, chosen by the rider at creation, fixed for the life of the ride), `completed_at`, `cancelled_at`, `createdAt`, `updatedAt`.
 - `driver_ride_alerts` table includes: `id (uuid)`, `ride_request_id (uuid)`, `driver_id (uuid)`, `vehicleType`, `message`, `inAppStatus`, `systemStatus`, `emailStatus`, `emailError`, `isRead`, `createdAt`, `updatedAt`.
@@ -518,6 +636,55 @@ This is a new, breaking change to signup and to how ride requests are delivered 
 - This was written and confirmed to compile (`npm run build`) cleanly, but has **not** been exercised against a real running database with live socket clients — there's no driver app in this repo to test against. Before shipping, verify end-to-end with a real Flutter build: two test driver accounts (one male, one female) both online near a pickup point, a rider account with a gender set, confirm only the matching-gender driver receives `ride_request:created`; then move one driver's reported location outside the 5 km radius and confirm they stop being matched.
 - Run `npm run migration:run` against whichever database you're testing/deploying against — this change ships a new migration (`AddGenderToUsers`) adding `users.gender`. Production runs with `synchronize: false`, so this column doesn't exist there until the migration runs.
 - Confirm the driver app actually joins `driver:{driverId}` on every connect/reconnect (not just after being selected for a ride) — this is the one behavior change most likely to silently break real-time dispatch if missed, since the app would otherwise still work fine for everything except receiving new ride pushes.
+
+---
+
+## Live Location Tracking: What Changed, and What to Verify Before Shipping
+
+Builds directly on the gender/proximity matching change above — same `driver:location:update` event, now also used to feed the rider's live tracking screen. Summarized here so the mobile integration doesn't miss it.
+
+**Added (nothing removed/renamed here, all additive):**
+- New room `tracking:ride:{rideRequestId}`, new events `driver:location`, `driver:location:snapshot`, `tracking:room_ready`. Full details under **Live Location Tracking** (in the Ride Requests section above).
+- `ride_request:driver_selected` / `ride_request:driver_assigned` payloads now also include `pickupLatitude`, `pickupLongitude`, `dropoffLatitude`, `dropoffLongitude` (previously just `rideRequestId`, `driverId`, `selectedAt`).
+- `ride_request:created` payload now also includes `pickupLatitude`, `pickupLongitude`, `driverLatitude`, `driverLongitude`, `distanceToPickupKm`, `driverLocationUpdatedAt` (see Ride Matching Rules above).
+- `GET /api/ride-requests/driver/alerts` now includes `distanceToPickupKm` on each alert's embedded `ride` object.
+
+**What the rider app needs to add:**
+1. After a driver is selected, send `join` with `{ room: 'tracking:ride:<rideRequestId>' }` (do this even though the backend also tries to auto-join you — your socket may not have been connected yet at the exact moment of selection, or may reconnect later).
+2. Listen for `driver:location` and `driver:location:snapshot`; show "Driver location unavailable" until one arrives with actual coordinates (i.e. not `{ available: false }`).
+3. Combine the incoming `lat`/`lng` with the ride's own pickup/dropoff coordinates and current `status` to decide (client-side) whether to show "distance to pickup" or "distance to destination" — the backend does not distinguish these itself.
+
+**What the driver app needs to add:** nothing beyond what the gender/proximity change already asked for — the existing `driver:location:update` ping now also drives this rider-facing feature for free.
+
+**Rollout behavior:** fully backward compatible. A driver who isn't sending `driver:location:update` yet simply never triggers a `driver:location` broadcast for their rides (no errors, nothing crashes) — the rider's tracking screen just stays on "Driver location unavailable" for that ride until the driver's app updates.
+
+**Not yet verified in this change (please confirm before relying on it in production):**
+- Written and confirmed to compile (`npm run build`) cleanly, but **not** exercised against a real running database with live socket clients on either side (no driver or rider mobile app in this repo to test against). Before shipping, verify end-to-end: select a driver on a test ride, confirm both the automatic room-join snapshot and a manual `join` both deliver a snapshot correctly (including the `available:false` case before any GPS has arrived), then send a few `driver:location:update` pings and confirm `driver:location` arrives in the tracking room, then complete or cancel the ride and confirm no further `driver:location` events arrive even though the driver keeps sending updates.
+- Confirm a driver can't join another driver's — or another rider's — tracking room: the `join` handler now looks the ride up in the database and checks `riderId`/`selectedDriverId` server-side, but this hasn't been exercised against a live malicious/mistaken client in this pass.
+- No database migration is needed for this change — it's socket/room logic and in-memory location data only, nothing new is persisted.
+
+---
+
+## Simplified Driver Registration: What Changed, and What to Verify Before Shipping
+
+Product decision: registration was collecting too much up front. Several fields/files are now optional, and a police character certificate is deliberately **not** part of registration at all — it's a separate, no-deadline upload for whenever the driver has it ready.
+
+**Changed (non-breaking — old clients that still send everything continue to work unchanged):**
+- `POST /api/driver-registration` no longer requires: `firstName`, `lastName`, `dateOfBirth`, `vehicleBrand`, `vehicleColor` (text fields), or `selfieWithDriverLicense`, `photoOfVehicle`, `vehicleRegistrationCertificate`, `backsideOfVehicleInformation` (files). Still required: `vehicleType`, `operatingArea`, `licenseNumber`, `expirationDate`, `idNumber`, `vehicleModel`, `numberPlate`, `productionYear`, and the `personalPicture`/`frontSideOfLicense`/`cnicFront`/`cnicBack` images.
+- `firstName`/`lastName` were dropped from the *requirement* specifically because they duplicate the account's own `name` (collected at signup) — no need to ask twice. If you still want to let a driver register under a different name than their account, you can still send them; they're just not mandatory anymore.
+
+**Added:**
+- New endpoint `POST /api/driver-registration/police-certificate` (see above) — upload it any time after registration exists, no time limit.
+- `driverRegistration` responses (`create`, `GET /me`, admin endpoints) now include `policeCertificateUrl` (`null` until uploaded).
+- Admin driver-registration endpoints now embed a linked `user: { id, name, email, phone }` object, since the admin dashboard needs a name to show even when `firstName`/`lastName` are `null`.
+
+**What the Flutter app should do:**
+- If you're building/updating the driver registration screen, you can drop the now-optional fields and files from the flow entirely for a simpler onboarding — that's the whole point of this change. The web version of this form (`RegisterYourVehicle.tsx`) was simplified the same way, as a reference for which fields stayed and which didn't.
+- Add a "police certificate" upload somewhere in the driver's ongoing profile/dashboard (post-registration, post-login) that calls the new endpoint — there's no rush, this can be built as a lower-priority follow-up screen since the backend places no deadline on it.
+
+**Not yet verified in this change (please confirm before relying on it in production):**
+- Written and confirmed to compile (`npm run build`) cleanly, but not exercised against a real running database — verify a registration submitted with only the required fields succeeds, and that admin's driver list/detail views render sensibly with `firstName`/`lastName`/`vehicleBrand`/`vehicleColor` all `null` and no optional documents uploaded.
+- Run `npm run migration:run` — this ships a new migration (`SimplifyDriverRegistration`) that relaxes several `NOT NULL` constraints on `driver_registrations` and adds `policeCertificateUrl`/`policeCertificatePublicId`. Existing rows are untouched (they already have all these fields filled in from before); only new registrations can now have nulls there.
 
 ---
 

@@ -71,12 +71,13 @@ export class RideRequestGateway implements OnGatewayConnection, OnGatewayDisconn
   }
 
   // Notify a specific list of drivers (already filtered by gender + proximity
-  // upstream) about a new ride request, one driver room at a time.
-  notifyDrivers(driverIds: string[], payload: any) {
-    if (driverIds.length === 0) return;
+  // upstream) about a new ride request. Each driver gets their own payload
+  // (e.g. their own distanceToPickupKm), emitted to their own room.
+  notifyDrivers(notifications: { driverId: string; payload: any }[]) {
+    if (notifications.length === 0) return;
 
-    this.logger.log(`Emitting ride_request:created to ${driverIds.length} matched driver(s)`);
-    for (const driverId of driverIds) {
+    this.logger.log(`Emitting ride_request:created to ${notifications.length} matched driver(s)`);
+    for (const { driverId, payload } of notifications) {
       this.server.to(`driver:${driverId}`).emit('ride_request:created', payload);
     }
   }
@@ -112,7 +113,49 @@ export class RideRequestGateway implements OnGatewayConnection, OnGatewayDisconn
   // Add connected rider/driver sockets to chat room so they receive chat messages immediately
   async joinUsersToChatRoom(rideRequestId: string, riderId: string, driverId: string) {
     const room = `chat:ride:${rideRequestId}`;
+    this.joinConnectedSockets(room, riderId, driverId);
 
+    // Notify both parties the chat room is ready
+    this.server.to(`rider:${riderId}`).emit('chat:room_ready', { rideRequestId, room });
+    this.server.to(`driver:${driverId}`).emit('chat:room_ready', { rideRequestId, room });
+  }
+
+  // Add connected rider/driver sockets to the live-tracking room so GPS
+  // updates for this ride reach them immediately, and push whatever location
+  // is already on record so the rider doesn't have to wait for the driver's
+  // next GPS ping to see something on screen.
+  async joinUsersToTrackingRoom(rideRequestId: string, riderId: string, driverId: string) {
+    const room = this.trackingRoom(rideRequestId);
+    this.joinConnectedSockets(room, riderId, driverId);
+
+    this.server.to(`rider:${riderId}`).emit('tracking:room_ready', { rideRequestId, room });
+    this.server.to(`driver:${driverId}`).emit('tracking:room_ready', { rideRequestId, room });
+
+    this.server
+      .to(room)
+      .emit('driver:location:snapshot', this.buildLocationSnapshot(rideRequestId, driverId));
+  }
+
+  private trackingRoom(rideRequestId: string): string {
+    return `tracking:ride:${rideRequestId}`;
+  }
+
+  private buildLocationSnapshot(rideRequestId: string, driverId: string) {
+    const fresh = this.driverLocationService.getFresh(driverId);
+    if (!fresh) {
+      return { rideRequestId, available: false };
+    }
+
+    return {
+      rideRequestId,
+      driverId,
+      lat: fresh.lat,
+      lng: fresh.lng,
+      updatedAt: new Date(fresh.updatedAt).toISOString(),
+    };
+  }
+
+  private joinConnectedSockets(room: string, riderId: string, driverId: string) {
     const sockets = Array.from(this.server.sockets.sockets.values());
 
     for (const sock of sockets) {
@@ -120,13 +163,9 @@ export class RideRequestGateway implements OnGatewayConnection, OnGatewayDisconn
       if (!uid) continue;
       if (uid === riderId || uid === driverId) {
         sock.join(room);
-        this.logger.log(`Socket user=${uid} joined chat room ${room}`);
+        this.logger.log(`Socket user=${uid} joined room ${room}`);
       }
     }
-
-    // Notify both parties the chat room is ready
-    this.server.to(`rider:${riderId}`).emit('chat:room_ready', { rideRequestId, room });
-    this.server.to(`driver:${driverId}`).emit('chat:room_ready', { rideRequestId, room });
   }
 
   @SubscribeMessage('join')
@@ -151,6 +190,22 @@ export class RideRequestGateway implements OnGatewayConnection, OnGatewayDisconn
       if (!user.is_driver) return;
     }
 
+    if (room.startsWith('tracking:ride:')) {
+      const rideRequestId = room.substring('tracking:ride:'.length);
+      const ride = await this.rideRequestRepository.findOne({ where: { id: rideRequestId } });
+
+      // Only the rider who owns this ride, or the driver actually selected on
+      // it, may join — and only once a driver has been selected at all.
+      if (!ride || !ride.selectedDriverId) return;
+      const isParticipant = user.id === ride.riderId || user.id === ride.selectedDriverId;
+      if (!isParticipant) return;
+
+      client.join(room);
+      this.logger.log(`Socket user=${user.id} joined room ${room}`);
+      client.emit('driver:location:snapshot', this.buildLocationSnapshot(rideRequestId, ride.selectedDriverId));
+      return;
+    }
+
     client.join(room);
     this.logger.log(`Socket user=${user.id} joined room ${room}`);
   }
@@ -159,7 +214,7 @@ export class RideRequestGateway implements OnGatewayConnection, OnGatewayDisconn
   // be dispatched by proximity. Expected to be emitted every ~10-30s (or on
   // significant movement) while the driver app is active/available.
   @SubscribeMessage('driver:location:update')
-  handleDriverLocationUpdate(
+  async handleDriverLocationUpdate(
     @MessageBody() data: { lat: number; lng: number },
     @ConnectedSocket() client: Socket,
   ) {
@@ -181,6 +236,27 @@ export class RideRequestGateway implements OnGatewayConnection, OnGatewayDisconn
     if (!isValid) return;
 
     this.driverLocationService.update(user.id, lat, lng);
+
+    // Fan this position out to every ride this driver currently has selected
+    // (there is normally exactly one) — the client never names a ride here,
+    // so there's no way for a driver to spoof updates onto someone else's ride.
+    const activeRides = await this.rideRequestRepository.find({
+      where: { selectedDriverId: user.id, status: 'driver_selected' },
+    });
+
+    if (activeRides.length === 0) return;
+
+    const updatedAt = new Date().toISOString();
+
+    for (const ride of activeRides) {
+      this.server.to(this.trackingRoom(ride.id)).emit('driver:location', {
+        rideRequestId: ride.id,
+        driverId: user.id,
+        lat,
+        lng,
+        updatedAt,
+      });
+    }
   }
 
   @SubscribeMessage('leave')

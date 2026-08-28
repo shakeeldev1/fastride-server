@@ -3,6 +3,7 @@ import {
   IsDateString,
   IsInt,
   IsIn,
+  IsOptional,
   IsString,
   Min,
   MinLength,
@@ -19,16 +20,21 @@ export class CreateDriverRegistrationDto {
   @MinLength(2, { message: 'Operating area must be at least 2 characters' })
   operatingArea!: string;
 
+  // Name is already captured at signup (users.name) — collected again here
+  // only if the driver wants it to differ from their account name.
+  @IsOptional()
   @IsString({ message: 'First name must be a string' })
   @MinLength(2, { message: 'First name must be at least 2 characters' })
-  firstName!: string;
+  firstName?: string;
 
+  @IsOptional()
   @IsString({ message: 'Last name must be a string' })
   @MinLength(2, { message: 'Last name must be at least 2 characters' })
-  lastName!: string;
+  lastName?: string;
 
+  @IsOptional()
   @IsDateString({}, { message: 'Date of birth must be a valid date' })
-  dateOfBirth!: string;
+  dateOfBirth?: string;
 
   @IsString({ message: 'License number must be a string' })
   @MinLength(3, { message: 'License number must be at least 3 characters' })
@@ -41,17 +47,19 @@ export class CreateDriverRegistrationDto {
   @MinLength(3, { message: 'ID number must be at least 3 characters' })
   idNumber!: string;
 
+  @IsOptional()
   @IsString({ message: 'Vehicle brand must be a string' })
   @MinLength(2, { message: 'Vehicle brand must be at least 2 characters' })
-  vehicleBrand!: string;
+  vehicleBrand?: string;
 
   @IsString({ message: 'Vehicle model must be a string' })
   @MinLength(2, { message: 'Vehicle model must be at least 2 characters' })
   vehicleModel!: string;
 
+  @IsOptional()
   @IsString({ message: 'Vehicle color must be a string' })
   @MinLength(2, { message: 'Vehicle color must be at least 2 characters' })
-  vehicleColor!: string;
+  vehicleColor?: string;
 
   @IsString({ message: 'Number plate must be a string' })
   @MinLength(3, { message: 'Number plate must be at least 3 characters' })

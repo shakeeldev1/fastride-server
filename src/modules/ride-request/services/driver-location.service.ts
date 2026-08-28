@@ -23,10 +23,10 @@ export class DriverLocationService {
   }
 
   /** Returns the driver's last known location, or null if unknown/stale. */
-  getFresh(driverId: string): { lat: number; lng: number } | null {
+  getFresh(driverId: string): LiveLocation | null {
     const entry = this.locations.get(driverId);
     if (!entry) return null;
     if (Date.now() - entry.updatedAt > LOCATION_STALE_MS) return null;
-    return { lat: entry.lat, lng: entry.lng };
+    return { lat: entry.lat, lng: entry.lng, updatedAt: entry.updatedAt };
   }
 }

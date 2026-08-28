@@ -5,11 +5,12 @@ import {
   HttpCode,
   Post,
   Request,
+  UploadedFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor, FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateDriverRegistrationDto } from './dto/create-driver-registration.dto';
 import { DriverRegistrationService } from './services/driver-registration.service';
@@ -47,5 +48,18 @@ export class DriverRegistrationController {
   @HttpCode(200)
   async getMyRegistration(@Request() req: any) {
     return this.driverRegistrationService.getMyRegistration(req.user.id);
+  }
+
+  // Uploaded any time after registration — not required up front, so a
+  // driver can add it weeks later without re-doing the whole application.
+  @Post('police-certificate')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(FileInterceptor('policeCertificate'))
+  @HttpCode(200)
+  async uploadPoliceCertificate(
+    @Request() req: any,
+    @UploadedFile() file: { buffer: Buffer; mimetype: string; originalname: string },
+  ) {
+    return this.driverRegistrationService.uploadPoliceCertificate(req.user.id, file);
   }
 }

@@ -125,7 +125,13 @@ export class RideRequestService {
     const pickupLatitude = Number(rideRequest.pickupLatitude);
     const pickupLongitude = Number(rideRequest.pickupLongitude);
 
-    const matchedDrivers: { driver: User; distanceKm: number | null }[] = [];
+    const matchedDrivers: {
+      driver: User;
+      distanceKm: number | null;
+      driverLat: number | null;
+      driverLng: number | null;
+      driverLocationUpdatedAt: string | null;
+    }[] = [];
 
     for (const driverReg of candidateDriverRegs) {
       const driver = await this.userRepository.findOne({
@@ -171,7 +177,13 @@ export class RideRequestService {
         }
       }
 
-      matchedDrivers.push({ driver, distanceKm });
+      matchedDrivers.push({
+        driver,
+        distanceKm,
+        driverLat: liveLocation?.lat ?? null,
+        driverLng: liveLocation?.lng ?? null,
+        driverLocationUpdatedAt: liveLocation ? new Date(liveLocation.updatedAt).toISOString() : null,
+      });
     }
 
     console.log(
@@ -179,9 +191,9 @@ export class RideRequestService {
     );
 
     const alerts: DriverRideAlert[] = [];
-    const notifiedDriverIds: string[] = [];
+    const notifications: { driverId: string; payload: any }[] = [];
 
-    for (const { driver, distanceKm } of matchedDrivers) {
+    for (const { driver, distanceKm, driverLat, driverLng, driverLocationUpdatedAt } of matchedDrivers) {
       const distanceSuffix = distanceKm !== null ? ` (${distanceKm.toFixed(1)} km away)` : '';
       const alertMessage = `New ${dto.vehicleType} ride request from ${dto.pickupLocation} to ${dto.dropoffLocation}${distanceSuffix}. Offered price: ${fareBreakdown.totalFare}`;
 
@@ -215,19 +227,28 @@ export class RideRequestService {
 
       await this.driverRideAlertRepository.save(alert);
       alerts.push(alert);
-      notifiedDriverIds.push(driver.id);
+      notifications.push({
+        driverId: driver.id,
+        payload: {
+          rideRequestId: rideRequest.id,
+          pickupLocation: dto.pickupLocation,
+          dropoffLocation: dto.dropoffLocation,
+          pickupLatitude,
+          pickupLongitude,
+          vehicleType: dto.vehicleType,
+          offeredPrice: offeredPriceValue,
+          estimatedDistanceKm: fareBreakdown.estimatedDistanceKm,
+          driverLatitude: driverLat,
+          driverLongitude: driverLng,
+          distanceToPickupKm: distanceKm,
+          driverLocationUpdatedAt,
+        },
+      });
     }
 
     // Emit a real-time event directly to each matched driver's own room
     try {
-      this.gateway.notifyDrivers(notifiedDriverIds, {
-        rideRequestId: rideRequest.id,
-        pickupLocation: dto.pickupLocation,
-        dropoffLocation: dto.dropoffLocation,
-        vehicleType: dto.vehicleType,
-        offeredPrice: offeredPriceValue,
-        estimatedDistanceKm: fareBreakdown.estimatedDistanceKm,
-      });
+      this.gateway.notifyDrivers(notifications);
     } catch (err) {
       // don't break the main flow on realtime failure
       console.warn('Realtime notify failed:', err);
@@ -289,8 +310,23 @@ export class RideRequestService {
 
     const rideById = new Map(rideRequests.map((ride) => [ride.id, ride]));
 
+    // Driver's current position, if any — used to show a live "how far is
+    // this ride from me right now" figure that stays consistent with what
+    // ride_request:created reports in real time.
+    const driverLocation = this.driverLocationService.getFresh(driverId);
+
     const enrichedAlerts = alerts.map((alert) => {
       const ride = rideById.get(alert.rideRequestId);
+
+      const distanceToPickupKm =
+        ride && driverLocation && ride.pickupLatitude !== null && ride.pickupLongitude !== null
+          ? calculateDistanceKm({
+              pickupLatitude: Number(ride.pickupLatitude),
+              pickupLongitude: Number(ride.pickupLongitude),
+              dropoffLatitude: driverLocation.lat,
+              dropoffLongitude: driverLocation.lng,
+            })
+          : null;
 
       return {
         ...alert,
@@ -312,6 +348,7 @@ export class RideRequestService {
               paymentMethod: ride.paymentMethod,
               status: ride.status,
               createdAt: ride.createdAt,
+              distanceToPickupKm,
             }
           : null,
       };
@@ -545,16 +582,28 @@ export class RideRequestService {
         rideRequestId,
         driverId,
         selectedAt: rideRequest.selectedAt,
+        pickupLatitude: rideRequest.pickupLatitude !== null ? Number(rideRequest.pickupLatitude) : null,
+        pickupLongitude: rideRequest.pickupLongitude !== null ? Number(rideRequest.pickupLongitude) : null,
+        dropoffLatitude: rideRequest.dropoffLatitude !== null ? Number(rideRequest.dropoffLatitude) : null,
+        dropoffLongitude: rideRequest.dropoffLongitude !== null ? Number(rideRequest.dropoffLongitude) : null,
       });
     } catch (err) {
       console.warn('Realtime notify selected driver failed:', err);
     }
 
-    // Auto-join connected rider/driver sockets to chat room and notify them
+    // Auto-join connected rider/driver sockets to the chat room and the live
+    // GPS tracking room (the latter also pushes an initial location snapshot
+    // if the driver already has one on record).
     try {
       await this.gateway.joinUsersToChatRoom(rideRequest.id, rideRequest.riderId, driverId);
     } catch (err) {
       console.warn('Failed to join users to chat room:', err);
+    }
+
+    try {
+      await this.gateway.joinUsersToTrackingRoom(rideRequest.id, rideRequest.riderId, driverId);
+    } catch (err) {
+      console.warn('Failed to join users to tracking room:', err);
     }
 
     const selectedDriver = await this.userRepository.findOne({ where: { id: driverId } });

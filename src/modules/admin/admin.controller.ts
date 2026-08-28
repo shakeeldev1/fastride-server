@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards, Patch, Delete } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query, Request, UseGuards, Patch, Delete } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { AdminService } from './admin.service';
@@ -73,17 +73,18 @@ export class AdminController {
   @UseGuards(JwtAuthGuard, AdminGuard)
   @HttpCode(200)
   async changeUserRole(
+    @Request() req: any,
     @Param('id') userId: string,
     @Body() changeRoleDto: ChangeUserRoleDto,
   ) {
-    return this.adminService.changeUserRole(userId, changeRoleDto);
+    return this.adminService.changeUserRole(req.user.id, userId, changeRoleDto);
   }
 
   @Delete('users/:id')
   @UseGuards(JwtAuthGuard, AdminGuard)
   @HttpCode(200)
-  async deleteUser(@Param('id') userId: string) {
-    return this.adminService.deleteUser(userId);
+  async deleteUser(@Request() req: any, @Param('id') userId: string) {
+    return this.adminService.deleteUser(req.user.id, userId);
   }
 
   @Get('wallet/withdrawals')

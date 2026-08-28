@@ -210,14 +210,33 @@ export class AdminService {
     };
   }
 
+  // Joins the driver's account so the admin UI can fall back to their
+  // signup name when firstName/lastName weren't collected at registration
+  // (now optional — see CreateDriverRegistrationDto). Uses `leftJoin` +
+  // explicit `addSelect` rather than `leftJoinAndSelect` so the user's
+  // password/otp/reset-token columns never end up in this admin response.
+  private driverRegistrationWithUserQuery() {
+    return this.driverRegistrationRepository
+      .createQueryBuilder('d')
+      .leftJoin('d.user', 'user')
+      .addSelect(['user.id', 'user.name', 'user.email', 'user.phone']);
+  }
+
   async listDriverRegistrations(status?: string) {
-    const where = status ? { status } : {};
-    const registrations = await this.driverRegistrationRepository.find({ where });
+    const query = this.driverRegistrationWithUserQuery();
+    if (status) {
+      query.andWhere('d.status = :status', { status });
+    }
+
+    const registrations = await query.getMany();
     return { registrations };
   }
 
   async getDriverRegistration(id: string) {
-    const registration = await this.driverRegistrationRepository.findOne({ where: { id } });
+    const registration = await this.driverRegistrationWithUserQuery()
+      .andWhere('d.id = :id', { id })
+      .getOne();
+
     if (!registration) {
       throw new NotFoundException('Driver registration not found');
     }
@@ -257,10 +276,26 @@ export class AdminService {
     return { message: 'Driver registration rejected', registration, reason };
   }
 
-  async changeUserRole(userId: string, changeRoleDto: ChangeUserRoleDto) {
+  async changeUserRole(
+    requestingAdminId: string,
+    userId: string,
+    changeRoleDto: ChangeUserRoleDto,
+  ) {
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('User not found');
+    }
+
+    // An admin can still edit their own driver flag, but can't deactivate
+    // their own account or strip their own admin access here — either would
+    // lock them out with no other admin necessarily able to undo it.
+    if (userId === requestingAdminId) {
+      if (changeRoleDto.is_active === false) {
+        throw new BadRequestException('You cannot deactivate your own account');
+      }
+      if (changeRoleDto.is_admin === false) {
+        throw new BadRequestException('You cannot remove admin access from your own account');
+      }
     }
 
     // Update role attributes if provided
@@ -289,7 +324,11 @@ export class AdminService {
     };
   }
 
-  async deleteUser(userId: string) {
+  async deleteUser(requestingAdminId: string, userId: string) {
+    if (userId === requestingAdminId) {
+      throw new BadRequestException('You cannot delete your own account');
+    }
+
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('User not found');

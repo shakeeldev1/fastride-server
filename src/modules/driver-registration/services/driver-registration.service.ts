@@ -50,72 +50,81 @@ export class DriverRegistrationService {
 
     const personalPicture = this.requireFile(files, 'personalPicture');
     const frontSideOfLicense = this.requireFile(files, 'frontSideOfLicense');
-    const selfieWithDriverLicense = this.requireFile(files, 'selfieWithDriverLicense');
     const cnicFront = this.requireFile(files, 'cnicFront');
     const cnicBack = this.requireFile(files, 'cnicBack');
-    const photoOfVehicle = this.requireFile(files, 'photoOfVehicle');
-    const vehicleRegistrationCertificate = this.requireFile(
+
+    // These four are optional now — the client wants a simpler signup, so a
+    // driver can submit without them and add them later if ever required.
+    const selfieWithDriverLicense = this.optionalFile(files, 'selfieWithDriverLicense');
+    const photoOfVehicle = this.optionalFile(files, 'photoOfVehicle');
+    const vehicleRegistrationCertificate = this.optionalFile(
       files,
       'vehicleRegistrationCertificate',
     );
-    const backsideOfVehicleInformation = this.requireFile(
+    const backsideOfVehicleInformation = this.optionalFile(
       files,
       'backsideOfVehicleInformation',
     );
 
     const folder = `indrive/driver-registrations/${userId}`;
 
-    const [personalPictureUpload, frontSideOfLicenseUpload, selfieWithDriverLicenseUpload, cnicFrontUpload, cnicBackUpload, photoOfVehicleUpload, vehicleRegistrationCertificateUpload, backsideOfVehicleInformationUpload] =
-      await Promise.all([
-        this.cloudinaryService.uploadImage(personalPicture, `${folder}/personal-picture`),
-        this.cloudinaryService.uploadImage(frontSideOfLicense, `${folder}/front-side-of-license`),
-        this.cloudinaryService.uploadImage(selfieWithDriverLicense, `${folder}/selfie-with-driver-license`),
-        this.cloudinaryService.uploadImage(cnicFront, `${folder}/cnic-front`),
-        this.cloudinaryService.uploadImage(cnicBack, `${folder}/cnic-back`),
-        this.cloudinaryService.uploadImage(photoOfVehicle, `${folder}/photo-of-vehicle`),
-        this.cloudinaryService.uploadImage(
-          vehicleRegistrationCertificate,
-          `${folder}/vehicle-registration-certificate`,
-        ),
-        this.cloudinaryService.uploadImage(
-          backsideOfVehicleInformation,
-          `${folder}/backside-of-vehicle-information`,
-        ),
-      ]);
+    const [
+      personalPictureUpload,
+      frontSideOfLicenseUpload,
+      cnicFrontUpload,
+      cnicBackUpload,
+      selfieWithDriverLicenseUpload,
+      photoOfVehicleUpload,
+      vehicleRegistrationCertificateUpload,
+      backsideOfVehicleInformationUpload,
+    ] = await Promise.all([
+      this.cloudinaryService.uploadImage(personalPicture, `${folder}/personal-picture`),
+      this.cloudinaryService.uploadImage(frontSideOfLicense, `${folder}/front-side-of-license`),
+      this.cloudinaryService.uploadImage(cnicFront, `${folder}/cnic-front`),
+      this.cloudinaryService.uploadImage(cnicBack, `${folder}/cnic-back`),
+      this.uploadIfPresent(selfieWithDriverLicense, `${folder}/selfie-with-driver-license`),
+      this.uploadIfPresent(photoOfVehicle, `${folder}/photo-of-vehicle`),
+      this.uploadIfPresent(
+        vehicleRegistrationCertificate,
+        `${folder}/vehicle-registration-certificate`,
+      ),
+      this.uploadIfPresent(
+        backsideOfVehicleInformation,
+        `${folder}/backside-of-vehicle-information`,
+      ),
+    ]);
 
     const registration = this.driverRegistrationRepository.create({
       userId,
-      firstName: dto.firstName,
-      lastName: dto.lastName,
-      dateOfBirth: dto.dateOfBirth,
+      firstName: dto.firstName ?? null,
+      lastName: dto.lastName ?? null,
+      dateOfBirth: dto.dateOfBirth ?? null,
       personalPictureUrl: personalPictureUpload.secure_url,
       personalPicturePublicId: personalPictureUpload.public_id,
       licenseNumber: dto.licenseNumber,
       expirationDate: dto.expirationDate,
       frontSideOfLicenseUrl: frontSideOfLicenseUpload.secure_url,
       frontSideOfLicensePublicId: frontSideOfLicenseUpload.public_id,
-      selfieWithDriverLicenseUrl: selfieWithDriverLicenseUpload.secure_url,
-      selfieWithDriverLicensePublicId: selfieWithDriverLicenseUpload.public_id,
+      selfieWithDriverLicenseUrl: selfieWithDriverLicenseUpload?.secure_url ?? null,
+      selfieWithDriverLicensePublicId: selfieWithDriverLicenseUpload?.public_id ?? null,
       idNumber: dto.idNumber,
       cnicFrontUrl: cnicFrontUpload.secure_url,
       cnicFrontPublicId: cnicFrontUpload.public_id,
       cnicBackUrl: cnicBackUpload.secure_url,
       cnicBackPublicId: cnicBackUpload.public_id,
-      photoOfVehicleUrl: photoOfVehicleUpload.secure_url,
-      photoOfVehiclePublicId: photoOfVehicleUpload.public_id,
-      vehicleRegistrationCertificateUrl:
-        vehicleRegistrationCertificateUpload.secure_url,
+      photoOfVehicleUrl: photoOfVehicleUpload?.secure_url ?? null,
+      photoOfVehiclePublicId: photoOfVehicleUpload?.public_id ?? null,
+      vehicleRegistrationCertificateUrl: vehicleRegistrationCertificateUpload?.secure_url ?? null,
       vehicleRegistrationCertificatePublicId:
-        vehicleRegistrationCertificateUpload.public_id,
-      backsideOfVehicleInformationUrl:
-        backsideOfVehicleInformationUpload.secure_url,
+        vehicleRegistrationCertificateUpload?.public_id ?? null,
+      backsideOfVehicleInformationUrl: backsideOfVehicleInformationUpload?.secure_url ?? null,
       backsideOfVehicleInformationPublicId:
-        backsideOfVehicleInformationUpload.public_id,
-      vehicleBrand: dto.vehicleBrand,
+        backsideOfVehicleInformationUpload?.public_id ?? null,
+      vehicleBrand: dto.vehicleBrand ?? null,
       vehicleType: dto.vehicleType,
       operatingArea: normalizeAreaText(dto.operatingArea),
       vehicleModel: dto.vehicleModel,
-      vehicleColor: dto.vehicleColor,
+      vehicleColor: dto.vehicleColor ?? null,
       numberPlate: dto.numberPlate,
       productionYear: dto.productionYear,
       status: 'pending',
@@ -150,14 +159,66 @@ export class DriverRegistrationService {
       throw new BadRequestException(`${fieldName} is required`);
     }
 
+    this.validateImageMimeType(file, fieldName);
+    return file;
+  }
+
+  private optionalFile(
+    files: Record<string, UploadableFile[]>,
+    fieldName: string,
+  ): UploadableFile | undefined {
+    const file = files[fieldName]?.[0];
+    if (!file) return undefined;
+
+    this.validateImageMimeType(file, fieldName);
+    return file;
+  }
+
+  private validateImageMimeType(file: UploadableFile, fieldName: string) {
     const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
     if (!allowedMimeTypes.includes(file.mimetype)) {
       throw new BadRequestException(
         `${fieldName} must be a valid image file (JPEG, PNG, WebP, GIF)`,
       );
     }
+  }
 
-    return file;
+  private async uploadIfPresent(file: UploadableFile | undefined, folder: string) {
+    if (!file) return null;
+    return this.cloudinaryService.uploadImage(file, folder);
+  }
+
+  async uploadPoliceCertificate(userId: string, file?: UploadableFile) {
+    if (!file) {
+      throw new BadRequestException('policeCertificate file is required');
+    }
+
+    const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'];
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestException(
+        'policeCertificate must be an image (JPEG, PNG, WebP, GIF) or a PDF',
+      );
+    }
+
+    const registration = await this.driverRegistrationRepository.findOne({ where: { userId } });
+
+    if (!registration) {
+      throw new NotFoundException(
+        'Complete your driver registration before uploading a police certificate',
+      );
+    }
+
+    const folder = `indrive/driver-registrations/${userId}`;
+    const upload = await this.cloudinaryService.uploadImage(file, `${folder}/police-certificate`);
+
+    registration.policeCertificateUrl = upload.secure_url;
+    registration.policeCertificatePublicId = upload.public_id;
+    await this.driverRegistrationRepository.save(registration);
+
+    return {
+      message: 'Police certificate uploaded successfully',
+      driverRegistration: this.formatResponse(registration),
+    };
   }
 
   private formatResponse(registration: DriverRegistration) {
@@ -180,6 +241,7 @@ export class DriverRegistrationService {
         registration.vehicleRegistrationCertificateUrl,
       backsideOfVehicleInformationUrl:
         registration.backsideOfVehicleInformationUrl,
+      policeCertificateUrl: registration.policeCertificateUrl,
       vehicleBrand: registration.vehicleBrand,
       vehicleType: registration.vehicleType,
       operatingArea: registration.operatingArea,
