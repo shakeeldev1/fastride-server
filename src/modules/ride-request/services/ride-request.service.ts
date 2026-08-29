@@ -124,6 +124,10 @@ export class RideRequestService {
 
     const pickupLatitude = Number(rideRequest.pickupLatitude);
     const pickupLongitude = Number(rideRequest.pickupLongitude);
+    const dropoffLatitude =
+      rideRequest.dropoffLatitude !== null ? Number(rideRequest.dropoffLatitude) : null;
+    const dropoffLongitude =
+      rideRequest.dropoffLongitude !== null ? Number(rideRequest.dropoffLongitude) : null;
 
     const matchedDrivers: {
       driver: User;
@@ -235,6 +239,8 @@ export class RideRequestService {
           dropoffLocation: dto.dropoffLocation,
           pickupLatitude,
           pickupLongitude,
+          dropoffLatitude,
+          dropoffLongitude,
           vehicleType: dto.vehicleType,
           offeredPrice: offeredPriceValue,
           estimatedDistanceKm: fareBreakdown.estimatedDistanceKm,
