@@ -144,7 +144,7 @@ This document lists server API endpoints, request/response fields, and role requ
 - Role: Authenticated User (applicant)
 - Content-Type: `multipart/form-data`
 - Text fields (body):
-  - `vehicleType` (string, required) allowed: `bike | car | auto | van`
+  - `vehicleType` (string, required) allowed: `bike | rikshaw | car_without_ac | car_with_ac | business_car`
   - `operatingArea` (string, required)
   - `firstName` (string, **optional**) — the account's own `name` (from signup) is the reliable source for display; only collect this if you want to let the driver specify a different registered name.
   - `lastName` (string, **optional**)

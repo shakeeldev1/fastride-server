@@ -11,8 +11,9 @@ import {
 
 export class CreateDriverRegistrationDto {
   @IsString({ message: 'Vehicle type must be a string' })
-  @IsIn(['bike', 'car', 'auto', 'van'], {
-    message: 'Vehicle type must be one of: bike, car, auto, van',
+  @IsIn(['bike', 'rikshaw', 'car_without_ac', 'car_with_ac', 'business_car'], {
+    message:
+      'Vehicle type must be one of: bike, rikshaw, car_without_ac, car_with_ac, business_car',
   })
   vehicleType!: string;
 
