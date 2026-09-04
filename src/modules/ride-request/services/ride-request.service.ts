@@ -299,6 +299,35 @@ export class RideRequestService {
     };
   }
 
+  // A driver's own ride history — every ride request they were ever selected
+  // for (driver_selected, completed, or cancelled after selection), most
+  // recent first. Distinct from getDriverAlerts, which lists ride offers the
+  // driver hasn't necessarily accepted.
+  async getDriverRideHistory(driverId: string) {
+    const rideRequests = await this.rideRequestRepository.find({
+      where: { selectedDriverId: driverId },
+      order: { createdAt: 'DESC' },
+    });
+
+    const riderIds = Array.from(new Set(rideRequests.map((ride) => ride.riderId)));
+    const riderById = new Map<string, User>();
+
+    if (riderIds.length > 0) {
+      const riders = await this.userRepository.find({ where: { id: In(riderIds) } });
+      riders.forEach((rider) => riderById.set(rider.id, rider));
+    }
+
+    return {
+      rideRequests: rideRequests.map((rideRequest) => {
+        const rider = riderById.get(rideRequest.riderId);
+        return {
+          ...this.formatRideRequest(rideRequest),
+          rider: rider ? { id: rider.id, name: rider.name, phone: rider.phone } : null,
+        };
+      }),
+    };
+  }
+
   async getDriverAlerts(driverId: string) {
     const alerts = await this.driverRideAlertRepository.find({
       where: { driverId },

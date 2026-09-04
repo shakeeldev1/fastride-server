@@ -50,6 +50,13 @@ export class RideRequestController {
     return this.rideRequestService.getDriverAlerts(req.user.id);
   }
 
+  @Get('driver/history')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  async getDriverRideHistory(@Request() req: any) {
+    return this.rideRequestService.getDriverRideHistory(req.user.id);
+  }
+
   @Post(':rideRequestId/driver/respond')
   @UseGuards(JwtAuthGuard)
   @HttpCode(200)

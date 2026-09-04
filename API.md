@@ -345,6 +345,13 @@ Once a driver is selected, the rider's app can track their live position over So
     - `inAppStatus`, `systemStatus`, `emailStatus`, `emailError`
     - `isRead`, `createdAt`, `updatedAt`
     - `ride` (embedded summary) — includes `paymentMethod` (`online | cash`) and `companyCommission`, so the driver's app can show upfront, before responding, both how they'll be paid and how much wallet balance responding `interested` will hold. Also includes `distanceToPickupKm` — computed fresh on every call against the driver's *current* live location (`null` if the driver has no live location on record right now), so it changes between polls as the driver moves. Same figure `ride_request:created` reports in real time (see Ride Matching Rules above) — kept consistent so the UI doesn't show two different numbers depending on whether the driver saw the push or found the ride by polling.
+- Note: this lists ride *offers/alerts* — it includes rides the driver was never selected for. For the driver's own ride history (rides they were actually selected for), use `GET /api/ride-requests/driver/history` below.
+
+### GET /api/ride-requests/driver/history
+- Role: Authenticated User (Driver)
+- Response: 200
+  - `rideRequests` array (every ride request this driver was ever `selectedDriverId` for — `driver_selected`, `completed`, or `cancelled`-after-selection — latest first). Same shape as `GET /api/ride-requests/me`'s entries, plus a `rider: { id, name, phone }` object (`null` only if the rider account has since been deleted).
+- Notes: unlike `driver/alerts`, this only includes rides the driver was actually chosen for — a ride the driver responded `interested` to but wasn't picked for never appears here.
 
 ### POST /api/ride-requests/:rideRequestId/driver/respond
 - Role: Authenticated User (Driver)
@@ -646,7 +653,7 @@ Builds directly on the gender/proximity matching change above — same `driver:l
 **Added (nothing removed/renamed here, all additive):**
 - New room `tracking:ride:{rideRequestId}`, new events `driver:location`, `driver:location:snapshot`, `tracking:room_ready`. Full details under **Live Location Tracking** (in the Ride Requests section above).
 - `ride_request:driver_selected` / `ride_request:driver_assigned` payloads now also include `pickupLatitude`, `pickupLongitude`, `dropoffLatitude`, `dropoffLongitude` (previously just `rideRequestId`, `driverId`, `selectedAt`).
-- `ride_request:created` payload now also includes `pickupLatitude`, `pickupLongitude`, `driverLatitude`, `driverLongitude`, `distanceToPickupKm`, `driverLocationUpdatedAt` (see Ride Matching Rules above).
+- `ride_request:created` payload now also includes `pickupLatitude`, `pickupLongitude`, `dropoffLatitude`, `dropoffLongitude`, `driverLatitude`, `driverLongitude`, `distanceToPickupKm`, `driverLocationUpdatedAt` (see Ride Matching Rules above).
 - `GET /api/ride-requests/driver/alerts` now includes `distanceToPickupKm` on each alert's embedded `ride` object.
 
 **What the rider app needs to add:**
@@ -710,6 +717,21 @@ This is a significant behavior change from the previous API version — summariz
 - The mobile app must be updated in lockstep: remove any call to the old `/api/payments/jazzcash/*` endpoints, add a screen to display `driverPaymentDetails` for online rides, add the driver-side "set payment method" and "top up wallet" flows, and surface the new insufficient-balance error from `driver/respond` and the new `cancel` action.
 
 **A subtle environment gotcha worth knowing if you touch payment/wallet expiry logic further:** this server's host clock is UTC+5. Postgres `timestamp` (without timezone) columns populated by `now()`, when read back through the `pg` driver and compared against a freshly computed `Date.now()`/`new Date()` in the same request, come back shifted by the host's UTC offset — a well-known `node-postgres` default-parsing quirk. Both the old `payments.expires_at` and the new `wallet_topups.expires_at` avoid this by computing and storing the expiry explicitly in application code (same pattern as `otp_expires_at`) rather than deriving it from `createdAt` at read time. If you add new expiry logic elsewhere, follow the same pattern — or migrate the column to `timestamptz`, which round-trips correctly regardless of host timezone.
+
+---
+
+## Driver Ride History + `ride_request:created` Dropoff Coordinates: What Changed
+
+Two small additive fixes, bundled here since both were found while investigating a driver-app report of the destination pin showing the wrong place.
+
+**Added:**
+- New endpoint `GET /api/ride-requests/driver/history` — a driver's own ride history (every ride they were actually `selectedDriverId` for), distinct from `driver/alerts` which lists offers regardless of outcome. See endpoint doc above.
+- `ride_request:created` payload now also includes `dropoffLatitude`/`dropoffLongitude` (previously only `pickupLatitude`/`pickupLongitude` were sent on this event — a driver client rendering the destination from the initial ride alert, before a fuller payload arrived later via `ride_request:driver_selected`, had no dropoff coordinates to work with).
+
+**Not yet verified in this change (please confirm before relying on them in production):**
+- Written and confirmed to compile (`npm run build` / `tsc --noEmit`) cleanly, but not exercised against a real running database or live socket clients in this pass.
+- No database migration needed — both changes reuse existing `ride_requests` columns.
+- The driver (Flutter) app should be updated to read `dropoffLatitude`/`dropoffLongitude` off the `ride_request:created` event directly, rather than relying solely on a later event or a hardcoded fallback, and to add a "ride history" screen backed by the new endpoint.
 
 ---
 
