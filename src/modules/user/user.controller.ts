@@ -15,6 +15,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { UserService } from './services/user.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { SetDriverPaymentMethodDto } from './dto/set-driver-payment-method.dto';
+import { SetDriverCnicDto } from './dto/set-driver-cnic.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('api/users')
@@ -46,6 +47,16 @@ export class UserController {
     @Body() dto: SetDriverPaymentMethodDto,
   ) {
     return this.userService.setDriverPaymentMethod(req.user.id, dto);
+  }
+
+  @Patch('driver/cnic')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(200)
+  async setDriverCnic(
+    @Request() req: any,
+    @Body() dto: SetDriverCnicDto,
+  ) {
+    return this.userService.setDriverCnic(req.user.id, dto);
   }
 
   @Post('profile-picture')

@@ -10,6 +10,7 @@ import { Repository } from 'typeorm';
 import { User } from '../entities/user.entity';
 import { UpdateProfileDto } from '../dto/update-profile.dto';
 import { SetDriverPaymentMethodDto } from '../dto/set-driver-payment-method.dto';
+import { SetDriverCnicDto } from '../dto/set-driver-cnic.dto';
 import { CloudinaryService } from './cloudinary.service';
 
 @Injectable()
@@ -89,6 +90,33 @@ export class UserService {
     this.logger.log(`Driver payment method set for user: ${userId}`);
     return {
       message: 'Payment method saved successfully',
+      user: this.formatUserResponse(user),
+    };
+  }
+
+  /**
+   * Set the driver's CNIC. Required by JazzCash for Mobile Wallet top-up
+   * transactions (sent as pp_CNIC on checkout) — collected once here and
+   * reused on every wallet top-up rather than asked for again each time.
+   */
+  async setDriverCnic(userId: string, dto: SetDriverCnicDto) {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.is_driver) {
+      throw new ForbiddenException('Only drivers need to provide a CNIC');
+    }
+
+    user.cnic = dto.cnic;
+
+    await this.userRepository.save(user);
+
+    this.logger.log(`CNIC set for driver: ${userId}`);
+    return {
+      message: 'CNIC saved successfully',
       user: this.formatUserResponse(user),
     };
   }
@@ -247,6 +275,7 @@ export class UserService {
       gender: user.gender,
       jazzcash_account_number: user.jazzcash_account_number,
       jazzcash_account_title: user.jazzcash_account_title,
+      cnic: user.cnic,
       created_at: user.created_at,
       updated_at: user.updated_at,
     };

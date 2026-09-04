@@ -126,6 +126,17 @@ This document lists server API endpoints, request/response fields, and role requ
 - **App integration note:** show the "Add Payment Method" action only once the driver's own registration status is `approved` (from `GET /api/driver-registration/me`, or simply once `GET /api/users/profile` returns `is_driver: true`). Calling this endpoint before approval will 403.
 - This is exactly what riders are shown as `driverPaymentDetails` once they select this driver on an `online`-payment ride (see Ride Requests below).
 
+### PATCH /api/users/driver/cnic
+- Role: Authenticated User (Driver)
+- Content-Type: `application/json`
+- Body:
+  - `cnic` (string, required) — exactly 13 digits, no dashes (e.g. `3520212345671`)
+- Response: 200
+  - `message`, `user` (updated summary — includes `cnic`)
+- Errors: 403 if the requesting user is not a driver.
+- Purpose: JazzCash requires a CNIC (`pp_CNIC`) on every Mobile Wallet top-up checkout. Collected once here and reused automatically on every `POST /api/wallet/topup/jazzcash/initiate` call, rather than asked for again each time — see Wallet Top-Up below.
+- **App integration note:** prompt for this the first time a driver tries to top up their wallet without one on file — `initiate` returns 400 until it's set.
+
 ### POST /api/users/deactivate
 - Role: Authenticated User
 - Response: 200
@@ -463,11 +474,12 @@ Every driver has a `wallet_balance` on their `users` row, backed by an append-on
 Self-serve JazzCash checkout a driver uses to fund their wallet, so they have enough `availableBalance` to keep responding `interested` to rides. Structurally the same kind of flow the old ride-payment integration used (JazzCash Hosted Checkout Page redirect + server callback), but the money is credited to the driver's `wallet_balance` instead of being tied to a ride.
 
 Flow:
-1. Driver calls `POST /api/wallet/topup/jazzcash/initiate` with the `amount` they want to add.
-2. Backend returns a `checkoutUrl` and a `fields` object (all `pp_*` parameters, including the signed `pp_SecureHash`).
-3. Client auto-submits an HTML form (`POST` with all `fields`) to `checkoutUrl` — typically inside a WebView.
-4. Driver completes payment on the JazzCash page. JazzCash POSTs the result to our server callback (`/api/wallet/topup/jazzcash/callback`), which the backend verifies and uses to credit the wallet, then redirects the browser to the configured frontend success/failure page with `topUpId`, `status`, `txnRefNo` query params.
-5. Client can poll `GET /api/wallet/topup/:topUpId/status`, or call `POST /api/wallet/topup/:topUpId/inquire` to force a live JazzCash status check if the WebView was closed before the callback landed.
+1. Driver must have a CNIC on file first (`PATCH /api/users/driver/cnic`, see Users above) — JazzCash requires it (`pp_CNIC`) for Mobile Wallet checkout. `initiate` returns 400 if missing.
+2. Driver calls `POST /api/wallet/topup/jazzcash/initiate` with the `amount` they want to add.
+3. Backend returns a `checkoutUrl` and a `fields` object (all `pp_*` parameters, including `pp_CNIC` and the signed `pp_SecureHash`).
+4. Client auto-submits an HTML form (`POST` with all `fields`) to `checkoutUrl` — typically inside a WebView.
+5. Driver completes payment on the JazzCash page. JazzCash POSTs the result to our server callback (`/api/wallet/topup/jazzcash/callback`), which the backend verifies and uses to credit the wallet, then redirects the browser to the configured frontend success/failure page with `topUpId`, `status`, `txnRefNo` query params.
+6. Client can poll `GET /api/wallet/topup/:topUpId/status`, or call `POST /api/wallet/topup/:topUpId/inquire` to force a live JazzCash status check if the WebView was closed before the callback landed.
 
 ### POST /api/wallet/topup/jazzcash/initiate
 - Role: Authenticated User (Driver)
@@ -476,7 +488,8 @@ Flow:
   - `amount` (number, required, > 0)
 - Behavior: reuses an existing non-expired `pending` top-up for the same amount instead of minting a new transaction reference, so re-opening the checkout screen doesn't risk a double charge.
 - Response: 201
-  - `message`, `topUpId`, `txnRefNo`, `checkoutUrl`, `fields` (object of `pp_*` form fields to POST to `checkoutUrl`)
+  - `message`, `topUpId`, `txnRefNo`, `checkoutUrl`, `fields` (object of `pp_*` form fields to POST to `checkoutUrl`, including `pp_CNIC`)
+- Errors: 400 if the driver has no CNIC on file yet — call `PATCH /api/users/driver/cnic` first.
 
 ### POST /api/wallet/topup/jazzcash/callback
 - Role: Public (called by JazzCash, not by app clients)
@@ -732,6 +745,27 @@ Two small additive fixes, bundled here since both were found while investigating
 - Written and confirmed to compile (`npm run build` / `tsc --noEmit`) cleanly, but not exercised against a real running database or live socket clients in this pass.
 - No database migration needed — both changes reuse existing `ride_requests` columns.
 - The driver (Flutter) app should be updated to read `dropoffLatitude`/`dropoffLongitude` off the `ride_request:created` event directly, rather than relying solely on a later event or a hardcoded fallback, and to add a "ride history" screen backed by the new endpoint.
+
+---
+
+## Driver CNIC for JazzCash Top-Up: What Changed
+
+JazzCash's Mobile Wallet checkout flow requires the payer's CNIC (`pp_CNIC`) on every transaction — flagged by JazzCash for this integration specifically for wallet top-ups.
+
+**Added:**
+- New endpoint `PATCH /api/users/driver/cnic` — a driver sets their CNIC (13 digits, no dashes) once. Returned as `cnic` on `user` in the profile/payment-method responses. See endpoint doc above (Users section).
+- `POST /api/wallet/topup/jazzcash/initiate` now requires the driver to have a CNIC on file — returns 400 (`"CNIC required before topping up..."`) if not, and includes `pp_CNIC` in the returned `fields` once it is.
+- New nullable `users.cnic` column (migration `AddCnicToUsers`).
+
+**Design decisions made without further confirmation (flag if wrong):**
+- CNIC is collected **once on the driver's profile** and reused on every top-up, rather than re-asked on each `initiate` call.
+- Stored as the **full 13-digit CNIC** (no dashes), not the last-6-digits variant some JazzCash Mobile-Wallet integration docs describe — confirm against your actual JazzCash merchant integration guide before shipping, since sending the wrong format/length in `pp_CNIC` will get transactions rejected by JazzCash, not just fail validation locally.
+- This is separate from `jazzcash_account_number`/`jazzcash_account_title` (`PATCH /api/users/driver/payment-method`) — that's the driver's own payout account shown to riders; CNIC is for the driver's own top-up checkout, a different money direction.
+
+**Not yet verified in this change (please confirm before relying on it in production):**
+- Written and confirmed to compile (`tsc --noEmit`) cleanly, but not exercised against a real JazzCash sandbox transaction — confirm a live top-up with `pp_CNIC` included actually succeeds (or is even accepted) against the sandbox before shipping to production.
+- Run `npm run migration:run` — this ships a new migration (`AddCnicToUsers`) adding `users.cnic`. Production runs with `synchronize: false`, so this column doesn't exist there until the migration runs.
+- Existing drivers with no CNIC on file will be blocked from topping up until they set one — the driver app needs a prompt/flow for this (e.g. surfaced from the 400 error, or proactively on the wallet screen).
 
 ---
 

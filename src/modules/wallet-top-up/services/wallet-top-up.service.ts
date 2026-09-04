@@ -49,6 +49,15 @@ export class WalletTopUpService {
       throw new BadRequestException('Top-up amount must be greater than 0');
     }
 
+    // JazzCash requires the driver's CNIC (pp_CNIC) on every Mobile Wallet
+    // checkout — collected once via PATCH /api/users/driver/cnic and reused
+    // here rather than asked for again on each top-up.
+    if (!user.cnic) {
+      throw new BadRequestException(
+        'CNIC required before topping up — set it first via PATCH /api/users/driver/cnic',
+      );
+    }
+
     // Reuse an in-flight pending top-up for the same amount instead of
     // minting a new pp_TxnRefNo every time, same reasoning as ride-payment
     // checkout reuse: avoids a rider/driver getting charged twice for the
@@ -87,6 +96,7 @@ export class WalletTopUpService {
       amount,
       billReference: topUp.billReference as string,
       description: `FastRide wallet top-up ${topUp.id}`,
+      cnic: user.cnic,
     });
 
     return {

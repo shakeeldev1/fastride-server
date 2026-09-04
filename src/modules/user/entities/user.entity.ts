@@ -77,6 +77,9 @@ export class User {
   @Column({ type: 'varchar', length: 100, nullable: true })
   jazzcash_account_title!: string | null;
 
+  @Column({ type: 'varchar', length: 13, nullable: true })
+  cnic!: string | null;
+
   @CreateDateColumn({ type: 'timestamp' })
   created_at!: Date;
 

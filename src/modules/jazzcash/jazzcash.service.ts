@@ -7,6 +7,7 @@ export interface BuildHostedCheckoutParams {
   amount: number;
   billReference: string;
   description: string;
+  cnic: string;
 }
 
 export interface HostedCheckoutRequest {
@@ -96,6 +97,7 @@ export class JazzCashService {
       pp_Description: params.description,
       pp_TxnExpiryDateTime: this.formatDateTime(expiry),
       pp_ReturnURL: this.config.returnUrl,
+      pp_CNIC: params.cnic,
     };
 
     fields.pp_SecureHash = this.generateSecureHash(fields);
