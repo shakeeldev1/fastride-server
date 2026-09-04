@@ -9,6 +9,7 @@ import { LoginDto } from '../dto/login.dto';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { ChangePasswordDto } from '../dto/change-password.dto';
 import { ForgotPasswordDto } from '../dto/forgot-password.dto';
+import { VerifyForgotPasswordOtpDto } from '../dto/verify-forgot-password-otp.dto';
 import { ResetPasswordDto } from '../dto/reset-password.dto';
 import * as crypto from 'crypto';
 import { EmailService } from './email.service';
@@ -249,7 +250,7 @@ export class AuthService {
   }
 
   /**
-   * Initiate forgot password flow: generate token, save, email link
+   * Initiate forgot password flow: generate OTP, save, email it
    */
   async forgotPassword(forgotDto: ForgotPasswordDto) {
     const { email } = forgotDto;
@@ -260,25 +261,61 @@ export class AuthService {
       throw new NotFoundException('User not found');
     }
 
-    // Generate secure token
-    const token = crypto.randomBytes(32).toString('hex');
-    const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    const otp = this.generateOTP();
+    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    user.reset_password_token = token;
+    user.reset_password_token = otp;
     user.reset_password_expires_at = expires;
 
     await this.userRepository.save(user);
 
-    // Send email with reset link
-    await this.emailService.sendPasswordResetEmail(email, token, user.name);
+    // Send OTP email
+    await this.emailService.sendPasswordResetOtpEmail(email, otp, user.name);
 
     return {
-      message: 'Password reset email sent',
+      message: 'OTP sent to your email',
     };
   }
 
   /**
-   * Complete password reset using token
+   * Confirm the forgot-password OTP. On success, swaps it out for a
+   * short-lived opaque reset token — resetPassword() below still consumes
+   * that token, not the OTP itself, so the OTP can't be replayed/brute-forced
+   * against the final step once it's been used.
+   */
+  async verifyForgotPasswordOtp(dto: VerifyForgotPasswordOtpDto) {
+    const { email, otp } = dto;
+
+    const user = await this.userRepository.findOne({ where: { email } });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (!user.reset_password_token || user.reset_password_token !== otp) {
+      throw new BadRequestException('Invalid OTP');
+    }
+
+    if (!user.reset_password_expires_at || new Date() > user.reset_password_expires_at) {
+      throw new BadRequestException('OTP has expired');
+    }
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const expires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+    user.reset_password_token = resetToken;
+    user.reset_password_expires_at = expires;
+
+    await this.userRepository.save(user);
+
+    return {
+      message: 'OTP verified',
+      resetToken,
+    };
+  }
+
+  /**
+   * Complete password reset using the token issued by verifyForgotPasswordOtp
    */
   async resetPassword(resetDto: ResetPasswordDto) {
     const { token, new_password, confirm_password } = resetDto;

@@ -71,14 +71,28 @@ This document lists server API endpoints, request/response fields, and role requ
 - Content-Type: `application/json`
 - Body:
   - `email` (string, required)
+- Action: generates a 6-digit OTP (10-minute expiry) and emails it to the user.
 - Response: 200
   - `message`
+- Errors: 404 if no user has this email.
+- **This changed** — it used to email a clickable reset link/token directly usable on `reset-password`. It now sends an OTP instead, matching the same in-app confirmation flow as signup (see `POST /api/auth/verify-otp`) — better suited to a mobile app than a link requiring deep-linking. See `forgot-password/verify-otp` below for the next step.
+
+### POST /api/auth/forgot-password/verify-otp
+- Role: Public
+- Content-Type: `application/json`
+- Body:
+  - `email` (string, required)
+  - `otp` (string, required, 6 digits)
+- Action: confirms the OTP sent by `forgot-password`. On success, issues a one-time opaque `resetToken` (15-minute expiry) and immediately invalidates the OTP — it cannot be reused, even to fetch another `resetToken`. This token, not the OTP, is what `reset-password` below consumes.
+- Response: 200
+  - `message`, `resetToken` (string) — pass this straight into `reset-password`'s `token` field
+- Errors: 404 if no user has this email; 400 if the OTP is wrong, already used, or expired.
 
 ### POST /api/auth/reset-password
 - Role: Public
 - Content-Type: `application/json`
 - Body:
-  - `token` (string, required) — token sent in reset email
+  - `token` (string, required) — the `resetToken` returned by `forgot-password/verify-otp`
   - `new_password` (string, required)
   - `confirm_password` (string, required)
 - Response: 200
@@ -346,7 +360,7 @@ Once a driver is selected, the rider's app can track their live position over So
 ### GET /api/ride-requests/me
 - Role: Authenticated User (Rider)
 - Response: 200
-  - `rideRequests` array (rider's own requests, latest first). Once a driver is selected and `paymentMethod = 'online'`, each entry also carries `driverPaymentDetails: { jazzcashAccountNumber, jazzcashAccountTitle }` — poll this endpoint (or use the `ride_request:driver_selected` socket event) to know when/where to show the transfer instructions, and keep showing them throughout tracking.
+  - `rideRequests` array (rider's own requests, latest first — this **is** the rider's ride history, no separate history endpoint exists). Once a driver is selected (any `paymentMethod`), each entry also carries `driver: { id, name, phone }`. If `paymentMethod = 'online'`, it additionally carries `driverPaymentDetails: { jazzcashAccountNumber, jazzcashAccountTitle }` — poll this endpoint (or use the `ride_request:driver_selected` socket event) to know when/where to show the transfer instructions, and keep showing them throughout tracking. Both fields are simply absent (not `null`) until a driver is selected.
 
 ### GET /api/ride-requests/driver/alerts
 - Role: Authenticated User (Driver app view)
@@ -766,6 +780,36 @@ JazzCash's Mobile Wallet checkout flow requires the payer's CNIC (`pp_CNIC`) on 
 - Written and confirmed to compile (`tsc --noEmit`) cleanly, but not exercised against a real JazzCash sandbox transaction — confirm a live top-up with `pp_CNIC` included actually succeeds (or is even accepted) against the sandbox before shipping to production.
 - Run `npm run migration:run` — this ships a new migration (`AddCnicToUsers`) adding `users.cnic`. Production runs with `synchronize: false`, so this column doesn't exist there until the migration runs.
 - Existing drivers with no CNIC on file will be blocked from topping up until they set one — the driver app needs a prompt/flow for this (e.g. surfaced from the 400 error, or proactively on the wallet screen).
+
+---
+
+## Rider History Missing Driver Info on Cash Rides: Bug Fix
+
+Found while investigating a report that ride history "isn't showing properly" for a rider after booking/completing a ride.
+
+**Root cause:** `GET /api/ride-requests/me` only ever looked up the assigned driver's user record when `paymentMethod === 'online'` (it needed that record for `driverPaymentDetails`). For `cash` rides — the majority of real traffic in this database — the driver was never fetched at all, so once a ride reached `driver_selected` or `completed`, the rider's own history showed only a raw `selectedDriverId` UUID with no name or phone. Nothing for a client to render. Verified directly against the database: a real completed `cash` ride (driver "Ahmad", `+923087154021`) previously returned with no driver info in this response at all.
+
+**Fixed:**
+- `GET /api/ride-requests/me` now looks up the selected driver for **every** ride, regardless of `paymentMethod`, and each entry carries `driver: { id, name, phone }` once one is selected — see endpoint doc above. `driverPaymentDetails` (JazzCash payout info) is unchanged, still `online`-only.
+
+**Verified:** confirmed live against the two real accounts this was reported against — a real completed `cash` ride now correctly returns `driver: { name: "Ahmad", phone: "+923087154021" }` on `GET /api/ride-requests/me`, and the driver's own `GET /api/ride-requests/driver/history` correctly returns `rider` on each entry (or `null` on the two rides whose original rider account has since been deleted — expected, not a bug). No migration needed — reuses the existing `users` table, just fetched under a wider condition.
+
+**What the rider (Flutter) app should do:** read `driver.name`/`driver.phone` off each ride history entry once present, rather than only `driverPaymentDetails`, to show who the driver was/is for **all** payment methods.
+
+---
+
+## Forgot Password: Now OTP-Based Instead of Email Link
+
+**Changed:** `POST /api/auth/forgot-password` used to email a clickable reset link containing a long-lived token, directly usable on `reset-password`. That's awkward for a mobile app (requires deep-linking). It now emails a 6-digit OTP instead, and a new endpoint confirms it before issuing the token `reset-password` actually consumes — see the three endpoint docs above (Auth section): `forgot-password` → `forgot-password/verify-otp` → `reset-password`.
+
+**Design:** the OTP itself is never accepted by `reset-password`. Confirming it via `forgot-password/verify-otp` swaps it for a separate opaque `resetToken` (15-minute expiry) and immediately invalidates the OTP, so it can't be reused even to mint another token. This mirrors the existing signup OTP pattern (`POST /api/auth/verify-otp`) for a consistent in-app UX, while keeping `reset-password`'s contract unchanged — no other endpoint or client code needs to change.
+
+**Verified live**, end-to-end, against a throwaway test account (created and deleted for this test — no real account was touched): signup → verify signup OTP → `forgot-password` → confirmed the OTP landed in `reset_password_token` → `forgot-password/verify-otp` → confirmed the same OTP is rejected if replayed → `reset-password` with the returned `resetToken` → confirmed login fails with the old password and succeeds with the new one. `tsc --noEmit` also clean.
+
+**Not yet verified:**
+- Real email delivery (SMTP) was not exercised in this test — the OTP was read directly from the database rather than from an actual inbox. Confirm `sendPasswordResetOtpEmail` actually delivers before shipping.
+- No migration needed — reuses the existing `users.reset_password_token`/`reset_password_expires_at` columns (previously held a hex token; now holds first an OTP, then a reset token).
+- The driver/rider (Flutter) app needs a 3-screen update: enter email → enter OTP (screen calls `forgot-password/verify-otp`, stores the returned `resetToken`) → enter new password (screen calls `reset-password` with that stored token). There's no more link/deep-link to handle.
 
 ---
 

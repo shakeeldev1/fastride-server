@@ -277,7 +277,7 @@ export class RideRequestService {
     const driverIds = Array.from(
       new Set(
         rideRequests
-          .filter((ride) => ride.paymentMethod === 'online' && ride.selectedDriverId)
+          .filter((ride) => ride.selectedDriverId)
           .map((ride) => ride.selectedDriverId as string),
       ),
     );
@@ -798,6 +798,13 @@ export class RideRequestService {
           }
         : undefined;
 
+    // Basic driver identity, independent of payment method — a rider needs
+    // to know who's driving them (or who drove them) for cash rides too,
+    // not just the JazzCash payout details shown for online rides.
+    const driverInfo = driver
+      ? { id: driver.id, name: driver.name, phone: driver.phone }
+      : undefined;
+
     return {
       id: rideRequest.id,
       riderId: rideRequest.riderId,
@@ -835,6 +842,7 @@ export class RideRequestService {
       cancelledAt: rideRequest.cancelledAt,
       createdAt: rideRequest.createdAt,
       updatedAt: rideRequest.updatedAt,
+      ...(driverInfo ? { driver: driverInfo } : {}),
       ...(driverPaymentDetails ? { driverPaymentDetails } : {}),
     };
   }

@@ -62,28 +62,25 @@ export class EmailService {
     }
   }
 
-  async sendPasswordResetEmail(email: string, resetToken: string, userName: string): Promise<void> {
+  async sendPasswordResetOtpEmail(email: string, otp: string, userName: string): Promise<void> {
     try {
-      const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
-
       const htmlContent = `
         <html>
           <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
             <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px;">
               <h2 style="color: #007bff;">Password Reset Request 🔐</h2>
               <p>Hi <strong>${userName}</strong>,</p>
-              <p>We received a request to reset your password. Click the button below to reset your password:</p>
-              
-              <div style="text-align: center; margin: 30px 0;">
-                <a href="${resetLink}" style="background-color: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">Reset Password</a>
+              <p>We received a request to reset your password. Use the OTP code below to confirm it's you:</p>
+
+              <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; text-align: center;">
+                <h1 style="letter-spacing: 5px; color: #007bff; margin: 0;">${otp}</h1>
               </div>
 
-              <p style="color: #666; font-size: 14px;">Or copy and paste this link: <br>${resetLink}</p>
-              <p><strong>Important:</strong> This link will expire in 1 hour.</p>
-              <p style="color: #666; font-size: 14px;">If you did not request a password reset, please ignore this email.</p>
-              
+              <p><strong>Important:</strong> This OTP will expire in 10 minutes.</p>
+              <p style="color: #666; font-size: 14px;">If you did not request a password reset, please ignore this email — your password will remain unchanged.</p>
+
               <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;">
-              
+
               <p style="color: #999; font-size: 12px; text-align: center;">
                 © 2026 Indrive. All rights reserved.
               </p>
@@ -95,14 +92,14 @@ export class EmailService {
       const mailOptions = {
         from: process.env.SMTP_USER,
         to: email,
-        subject: 'Indrive Password Reset',
+        subject: 'Indrive Password Reset - OTP Code',
         html: htmlContent,
       };
 
       await this.transporter.sendMail(mailOptions);
-      this.logger.log(`Password reset email sent successfully to ${email}`);
+      this.logger.log(`Password reset OTP email sent successfully to ${email}`);
     } catch (error) {
-      this.logger.error(`Failed to send password reset email to ${email}:`, (error as Error).message);
+      this.logger.error(`Failed to send password reset OTP email to ${email}:`, (error as Error).message);
       throw new Error(`Email sending failed: ${(error as Error).message}`);
     }
   }
