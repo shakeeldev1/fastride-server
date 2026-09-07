@@ -33,7 +33,7 @@ This document lists server API endpoints, request/response fields, and role requ
   - `email` (string, required)
   - `otp` (string, required)
 - Response: 200
-  - `message`, `user` summary
+  - `message`, `token` (JWT access token), `refresh_token` (JWT, longer-lived — see `POST /api/auth/refresh-token`), `user` summary
 
 ### POST /api/auth/resend-otp
 - Role: Public
@@ -50,7 +50,23 @@ This document lists server API endpoints, request/response fields, and role requ
   - `email` (string, required)
   - `password` (string, required)
 - Response: 200
-  - `message`, `token` (JWT), `user` summary — includes `id`, `name`, `email`, `phone`, `profile_picture_url`, `is_admin`, `is_driver`, `is_active`, `gender`
+  - `message`, `token` (JWT access token, 24h expiry), `refresh_token` (JWT, 30-day expiry by default — see `POST /api/auth/refresh-token`), `user` summary — includes `id`, `name`, `email`, `phone`, `profile_picture_url`, `is_admin`, `is_driver`, `is_active`, `gender`
+
+### POST /api/auth/refresh-token
+- Role: Public (requires a valid refresh token, not an access token)
+- Content-Type: `application/json`
+- Body:
+  - `refresh_token` (string, required) — the `refresh_token` issued by `login` or a previous call to this endpoint
+- Action: verifies the refresh token's signature, expiry, and that it matches the hash stored for the user (i.e. hasn't already been rotated out or revoked by `logout`). On success, rotates it — the old refresh token becomes invalid and a new one is returned alongside a new access token.
+- Response: 200
+  - `message`, `token` (new JWT access token), `refresh_token` (new JWT refresh token)
+- Errors: 401 if the token is malformed, expired, or has been revoked/rotated already.
+
+### POST /api/auth/logout
+- Role: Authenticated User
+- Action: revokes the user's currently stored refresh token so it (and any request replaying it) can no longer be used to mint new access tokens. The access token used to call this endpoint is unaffected and remains valid until it naturally expires.
+- Response: 200
+  - `message`
 
 ### GET /api/auth/me
 - Role: Authenticated User

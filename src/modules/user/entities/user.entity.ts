@@ -29,6 +29,12 @@ export class User {
   @Column({ type: 'timestamp', nullable: true })
   reset_password_expires_at!: Date;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  refresh_token!: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  refresh_token_expires_at!: Date | null;
+
   @Column({ type: 'boolean', default: false })
   is_email_verified!: boolean;
 

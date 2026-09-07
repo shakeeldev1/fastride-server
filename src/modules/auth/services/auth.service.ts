@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
+import ms from 'ms';
 import { User } from '../../user/entities/user.entity';
 import { SignupDto } from '../dto/signup.dto';
 import { LoginDto } from '../dto/login.dto';
@@ -11,8 +12,13 @@ import { ChangePasswordDto } from '../dto/change-password.dto';
 import { ForgotPasswordDto } from '../dto/forgot-password.dto';
 import { VerifyForgotPasswordOtpDto } from '../dto/verify-forgot-password-otp.dto';
 import { ResetPasswordDto } from '../dto/reset-password.dto';
+import { RefreshTokenDto } from '../dto/refresh-token.dto';
 import * as crypto from 'crypto';
 import { EmailService } from './email.service';
+
+const REFRESH_TOKEN_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '30d';
+const REFRESH_TOKEN_SECRET =
+  process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET || 'your-refresh-secret-key';
 
 @Injectable()
 export class AuthService {
@@ -28,6 +34,29 @@ export class AuthService {
    */
   private generateOTP(): string {
     return Math.floor(100000 + Math.random() * 900000).toString();
+  }
+
+  /**
+   * Issue a new access + refresh token pair for a user, persisting a hash of
+   * the refresh token (not the raw value) so it can be verified and revoked
+   * later without storing a usable credential in the database.
+   */
+  private async issueTokens(user: User) {
+    const payload = { id: user.id, email: user.email };
+
+    const accessToken = this.jwtService.sign(payload);
+    const refreshToken = this.jwtService.sign(
+      { ...payload, jti: crypto.randomUUID() },
+      { secret: REFRESH_TOKEN_SECRET, expiresIn: REFRESH_TOKEN_EXPIRES_IN as ms.StringValue },
+    );
+
+    user.refresh_token = await bcrypt.hash(refreshToken, 10);
+    user.refresh_token_expires_at = new Date(
+      Date.now() + ms(REFRESH_TOKEN_EXPIRES_IN as ms.StringValue),
+    );
+    await this.userRepository.save(user);
+
+    return { accessToken, refreshToken };
   }
 
   /**
@@ -114,12 +143,13 @@ export class AuthService {
 
     await this.userRepository.save(user);
 
-    // Generate JWT token on successful verification
-    const token = this.jwtService.sign({ id: user.id, email: user.email });
+    // Generate JWT access + refresh tokens on successful verification
+    const { accessToken, refreshToken } = await this.issueTokens(user);
 
     return {
       message: 'Email verified successfully',
-      token,
+      token: accessToken,
+      refresh_token: refreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -187,20 +217,13 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    // Generate JWT token
-    const token = this.jwtService.sign({
-      id: user.id,
-      email: user.email,
-    });
-
-    console.log('✅ JWT Token Generated');
-    console.log('📋 JWT_SECRET used for signing:', process.env.JWT_SECRET);
-    console.log('🔑 Token payload:', { id: user.id, email: user.email });
-    console.log('🎫 Generated token:', token.substring(0, 50) + '...');
+    // Generate JWT access + refresh tokens
+    const { accessToken, refreshToken } = await this.issueTokens(user);
 
     return {
       message: 'Logged in successfully',
-      token,
+      token: accessToken,
+      refresh_token: refreshToken,
       user: {
         id: user.id,
         name: user.name,
@@ -344,6 +367,63 @@ export class AuthService {
 
     return {
       message: 'Password has been reset successfully',
+    };
+  }
+
+  /**
+   * Exchange a valid, unrevoked refresh token for a new access + refresh
+   * token pair. The old refresh token is rotated out (its hash overwritten)
+   * so it cannot be reused once a new one has been issued.
+   */
+  async refreshToken(refreshTokenDto: RefreshTokenDto) {
+    const { refresh_token } = refreshTokenDto;
+
+    let payload: { id: string };
+    try {
+      payload = await this.jwtService.verifyAsync(refresh_token, {
+        secret: REFRESH_TOKEN_SECRET,
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    const user = await this.userRepository.findOne({ where: { id: payload.id } });
+
+    if (!user || !user.refresh_token || !user.refresh_token_expires_at) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (new Date() > user.refresh_token_expires_at) {
+      throw new UnauthorizedException('Refresh token has expired');
+    }
+
+    const isTokenValid = await bcrypt.compare(refresh_token, user.refresh_token);
+
+    if (!isTokenValid) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    const { accessToken, refreshToken: newRefreshToken } = await this.issueTokens(user);
+
+    return {
+      message: 'Token refreshed successfully',
+      token: accessToken,
+      refresh_token: newRefreshToken,
+    };
+  }
+
+  /**
+   * Revoke the stored refresh token so it can no longer be used to mint new
+   * access tokens.
+   */
+  async logout(userId: string) {
+    await this.userRepository.update(userId, {
+      refresh_token: null,
+      refresh_token_expires_at: null,
+    });
+
+    return {
+      message: 'Logged out successfully',
     };
   }
 
