@@ -19,6 +19,14 @@ export class WalletTopUp {
   @Column({ type: 'varchar', length: 20, default: 'jazzcash' })
   provider!: string;
 
+  /** Which JazzCash product was used: 'mwallet' (direct mobile account debit) or 'card' (Page Redirection). */
+  @Column({ type: 'varchar', length: 10, default: 'card' })
+  method!: string;
+
+  /** JazzCash-linked mobile account number used for an 'mwallet' top-up. */
+  @Column({ name: 'mobile_number', type: 'varchar', length: 20, nullable: true })
+  mobileNumber!: string | null;
+
   @Column({ type: 'numeric', precision: 12, scale: 2 })
   amount!: string;
 
@@ -54,6 +62,21 @@ export class WalletTopUp {
 
   @Column({ name: 'expires_at', type: 'timestamp', nullable: true })
   expiresAt!: Date | null;
+
+  @Column({ name: 'refund_status', type: 'varchar', length: 20, nullable: true })
+  refundStatus!: string | null;
+
+  @Column({ name: 'refunded_amount', type: 'numeric', precision: 12, scale: 2, nullable: true })
+  refundedAmount!: string | null;
+
+  @Column({ name: 'jazzcash_refund_response_code', type: 'varchar', length: 10, nullable: true })
+  jazzcashRefundResponseCode!: string | null;
+
+  @Column({ name: 'jazzcash_refund_response_message', type: 'varchar', length: 255, nullable: true })
+  jazzcashRefundResponseMessage!: string | null;
+
+  @Column({ name: 'refunded_at', type: 'timestamp', nullable: true })
+  refundedAt!: Date | null;
 
   @CreateDateColumn({ type: 'timestamp' })
   createdAt!: Date;

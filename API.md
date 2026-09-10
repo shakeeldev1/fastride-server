@@ -501,41 +501,73 @@ Every driver has a `wallet_balance` on their `users` row, backed by an append-on
 
 ## Wallet Top-Up
 
-Self-serve JazzCash checkout a driver uses to fund their wallet, so they have enough `availableBalance` to keep responding `interested` to rides. Structurally the same kind of flow the old ride-payment integration used (JazzCash Hosted Checkout Page redirect + server callback), but the money is credited to the driver's `wallet_balance` instead of being tied to a ride.
+Self-serve JazzCash top-up a driver uses to fund their wallet, so they have enough `availableBalance` to keep responding `interested` to rides. Built against JazzCash's official 2026 REST guides (MWallet REST API v2.0, Card Page Redirection v1.1, IPN, Status Inquiry v2.0, MWallet/Card Refund APIs), and supports **two** distinct JazzCash products, chosen per-request via `method`:
 
-Flow:
-1. Driver must have a CNIC on file first (`PATCH /api/users/driver/cnic`, see Users above) — JazzCash requires it (`pp_CNIC`) for Mobile Wallet checkout. `initiate` returns 400 if missing.
-2. Driver calls `POST /api/wallet/topup/jazzcash/initiate` with the `amount` they want to add.
-3. Backend returns a `checkoutUrl` and a `fields` object (all `pp_*` parameters, including `pp_CNIC` and the signed `pp_SecureHash`).
-4. Client auto-submits an HTML form (`POST` with all `fields`) to `checkoutUrl` — typically inside a WebView.
-5. Driver completes payment on the JazzCash page. JazzCash POSTs the result to our server callback (`/api/wallet/topup/jazzcash/callback`), which the backend verifies and uses to credit the wallet, then redirects the browser to the configured frontend success/failure page with `topUpId`, `status`, `txnRefNo` query params.
-6. Client can poll `GET /api/wallet/topup/:topUpId/status`, or call `POST /api/wallet/topup/:topUpId/inquire` to force a live JazzCash status check if the WebView was closed before the callback landed.
+- **`mwallet`** — MWallet REST API v2.0 (with CNIC). A direct, synchronous, server-to-server debit of the driver's own JazzCash mobile account. No redirect, no checkout page: the driver's `mobileNumber` + CNIC last-6-digits (`pp_CNIC`) authorize the debit, and JazzCash's response (`pp_ResponseCode "000"`) tells us immediately whether it succeeded.
+- **`card`** — Card Page Redirection v1.1 (`pp_TxnType "MPAY"`). The driver is redirected to JazzCash's hosted checkout page, which itself offers Mobile Account, Voucher, and Credit/Debit Card as payment options. JazzCash then posts the result both to our browser return URL (`pp_ReturnURL`) and, independently, to our REST IPN listener.
+
+Both methods share the same `wallet_topups` row shape, status values, and reconciliation endpoints (`/status`, `/inquire`, IPN). `method` defaults to `card` when omitted.
+
+**Important JazzCash response-code distinction** (source of an earlier bug in this integration — do not conflate these):
+- `pp_ResponseCode "000"` — the *API call itself* succeeded. This is the success code for the synchronous MWallet debit response, the Status Inquiry API's own `pp_ResponseCode`, and both refund APIs.
+- `pp_ResponseCode "121"` — the *payment* is confirmed complete. This is the success code used by the IPN payload, the Card Page Redirection browser callback, and Status Inquiry's `pp_PaymentResponseCode` (a different field from `pp_ResponseCode` on that same response).
+
+Flow (`mwallet`):
+1. Driver must have a CNIC on file (`PATCH /api/users/driver/cnic`) — JazzCash requires the **last 6 digits** of it as `pp_CNIC`; the backend slices this from the stored 13-digit CNIC. `initiate` returns 400 if missing.
+2. Driver calls `POST /api/wallet/topup/jazzcash/initiate` with `{ amount, method: "mwallet", mobileNumber }` (`mobileNumber` in local format, e.g. `03001234567`; falls back to the driver's own account phone if omitted).
+3. Backend calls JazzCash's MWallet REST API v2.0 directly and returns the result synchronously — no client-side redirect needed. The wallet is credited immediately on `pp_ResponseCode "000"`.
+4. As a safety net for an inconclusive network response on our side, the client can still call `POST /api/wallet/topup/:topUpId/inquire` (Status Inquiry API) or wait for the IPN.
+
+Flow (`card`):
+1. Driver calls `POST /api/wallet/topup/jazzcash/initiate` with `{ amount, method: "card" }` (or omits `method`).
+2. Backend returns a `checkoutUrl` and a `fields` object (all `pp_*` form parameters, including the signed `pp_SecureHash`).
+3. Client auto-submits an HTML form (`POST` with all `fields`) to `checkoutUrl` — typically inside a WebView.
+4. Driver completes payment on the JazzCash page. JazzCash POSTs the result to our server callback (`/api/wallet/topup/jazzcash/callback`), which the backend verifies and uses to credit the wallet, then redirects the browser to the configured frontend success/failure page with `topUpId`, `status`, `txnRefNo` query params. JazzCash also independently posts the same result to the REST IPN listener (`/api/wallet/topup/jazzcash/ipn`) — both paths funnel through the same idempotent update, so whichever arrives first wins and the other is a no-op.
+5. Client can poll `GET /api/wallet/topup/:topUpId/status`, or call `POST /api/wallet/topup/:topUpId/inquire` to force a live JazzCash status check if the WebView was closed before the callback/IPN landed.
 
 ### POST /api/wallet/topup/jazzcash/initiate
 - Role: Authenticated User (Driver)
 - Content-Type: `application/json`
 - Body:
   - `amount` (number, required, > 0)
-- Behavior: reuses an existing non-expired `pending` top-up for the same amount instead of minting a new transaction reference, so re-opening the checkout screen doesn't risk a double charge.
+  - `method` (string, optional) — `"mwallet" | "card"`, defaults to `"card"`
+  - `mobileNumber` (string, optional, `mwallet` only) — local format `03XXXXXXXXX`; defaults to the driver's account phone number
+- Behavior (`card`): reuses an existing non-expired `pending` top-up for the same amount instead of minting a new transaction reference, so re-opening the checkout screen doesn't risk a double charge. Behavior (`mwallet`): always synchronous, no reuse (the call either completes or fails immediately).
 - Response: 201
-  - `message`, `topUpId`, `txnRefNo`, `checkoutUrl`, `fields` (object of `pp_*` form fields to POST to `checkoutUrl`, including `pp_CNIC`)
-- Errors: 400 if the driver has no CNIC on file yet — call `PATCH /api/users/driver/cnic` first.
+  - `mwallet`: `{ topUp, jazzcash }` — `topUp.status` is already `completed`/`failed`, `jazzcash` is JazzCash's raw MWallet response
+  - `card`: `{ message, topUpId, txnRefNo, checkoutUrl, fields }` (object of `pp_*` form fields to POST to `checkoutUrl`)
+- Errors: 400 if the driver has no CNIC on file yet (`mwallet` only) — call `PATCH /api/users/driver/cnic` first. 400 if `mobileNumber` isn't a valid local-format JazzCash account number.
 
 ### POST /api/wallet/topup/jazzcash/callback
-- Role: Public (called by JazzCash, not by app clients)
+- Role: Public (called by JazzCash's browser redirect, not by app clients)
 - Content-Type: `application/x-www-form-urlencoded`
-- Action: verifies `pp_SecureHash` and `pp_Amount`, updates the matching `wallet_topups` row by `pp_TxnRefNo`, credits the driver's wallet on first success, and issues an HTTP redirect (302) to the frontend success/failure URL.
+- Action: verifies `pp_SecureHash`, checks `pp_ResponseCode === "121"` for success, verifies `pp_Amount`, updates the matching `wallet_topups` row by `pp_TxnRefNo`, credits the driver's wallet on first success, and issues an HTTP redirect (302) to the frontend success/failure URL.
+
+### POST /api/wallet/topup/jazzcash/ipn
+- Role: Public (called server-to-server by JazzCash — must be registered as the IPN URL in the JazzCash merchant portal, Integration > Credentials)
+- Content-Type: `application/json`
+- Action: same verification/update logic as the callback above (shared, idempotent — a webhook racing a browser callback for the same `pp_TxnRefNo` can't double-credit), but responds with JazzCash's expected REST ack instead of redirecting.
+- Response: 200 — `{ pp_ResponseCode: "000", pp_ResponseMessage: "IPN received successfully", pp_SecureHash }` always, regardless of the underlying transaction's own outcome (that's carried in the request's `pp_ResponseCode`, not this ack).
 
 ### GET /api/wallet/topup/:topUpId/status
 - Role: Authenticated User (must own the top-up)
 - Response: 200
-  - `topUp` { `id`, `userId`, `provider`, `amount`, `currency`, `status` (`pending | completed | failed | expired`), `txnRefNo`, `jazzcashResponseCode`, `jazzcashResponseMessage`, `paidAt`, `createdAt`, `updatedAt` }
+  - `topUp` { `id`, `userId`, `provider`, `method` (`mwallet | card`), `amount`, `currency`, `status` (`pending | completed | failed | expired`), `txnRefNo`, `jazzcashResponseCode`, `jazzcashResponseMessage`, `refundStatus` (`null | completed | failed`), `refundedAmount`, `refundedAt`, `paidAt`, `createdAt`, `updatedAt` }
 
 ### POST /api/wallet/topup/:topUpId/inquire
 - Role: Authenticated User (must own the top-up)
-- Action: if the top-up isn't already `completed`, calls JazzCash's Payment Inquiry API live and syncs the local status (crediting the wallet if this is what confirms success).
+- Action: if the top-up isn't already `completed`, calls JazzCash's Status Inquiry API v2.0 live and syncs the local status (crediting the wallet if `pp_ResponseCode === "000"` **and** `pp_PaymentResponseCode === "121"` — both must hold, per JazzCash's docs).
 - Response: 200
   - `topUp` (same shape as status endpoint)
+
+### POST /api/wallet/topup/:topUpId/refund
+- Role: Admin
+- Content-Type: `application/json`
+- Body:
+  - `amount` (number, optional) — defaults to the full original top-up amount
+- Action: calls JazzCash's MWallet Refund API v1.1 or Card Refund API v2.0 (whichever matches the top-up's `method`), then debits the refunded amount back out of the driver's wallet on success. One refund per top-up — returns 400 if already refunded or if the top-up isn't `completed`.
+- Response: 200
+  - `topUp` (same shape as status endpoint, now with `refundStatus`/`refundedAmount`/`refundedAt` populated), `jazzcash` (JazzCash's raw refund response — note the Card Refund API returns unprefixed field names, e.g. `ResponseCode` not `pp_ResponseCode`)
 
 ---
 
@@ -649,7 +681,7 @@ Flow:
 - `driver_ride_responses` table includes: `id (uuid)`, `ride_request_id (uuid)`, `driver_id (uuid)`, `decision` (`interested | declined`), `counterOfferPrice`, `message`, `createdAt`, `updatedAt`. Unique on `(ride_request_id, driver_id)`.
 - `wallet_transactions` table includes: `id (uuid)`, `user_id (uuid)`, `type` (`wallet_top_up | commission_debit | withdrawal | withdrawal_rejected_refund` — plus the now-unused legacy `ride_earning`), `amount` (signed), `balance_after`, `ride_request_id (uuid, nullable)`, `description`, `status` (`completed | pending | rejected`), `rejection_reason`, `createdAt`, `updatedAt`. A unique constraint on `(ride_request_id, type)` guarantees at most one `commission_debit` row per ride, which is what prevents double-debiting from a retried/duplicate `complete` call.
 - `wallet_holds` table includes: `id (uuid)`, `driver_id (uuid)`, `ride_request_id (uuid)`, `amount`, `status` (`active | released | captured`), `createdAt`, `updatedAt`. Unique on `(ride_request_id, driver_id)` — one hold per driver per ride.
-- `wallet_topups` table includes: `id (uuid)`, `user_id (uuid)`, `provider` (default `jazzcash`), `amount`, `currency` (default `PKR`), `status` (`pending | completed | failed | expired`), `txn_ref_no` (unique), `bill_reference`, `jazzcash_response_code`, `jazzcash_response_message`, `jazzcash_retrieval_reference_no`, `jazzcash_auth_code`, `raw_callback_payload` (jsonb), `paid_at`, `expires_at`, `createdAt`, `updatedAt` — same shape the old `payments` table used for ride payments.
+- `wallet_topups` table includes: `id (uuid)`, `user_id (uuid)`, `provider` (default `jazzcash`), `method` (`mwallet | card`, default `card`), `mobile_number` (nullable, `mwallet` only), `amount`, `currency` (default `PKR`), `status` (`pending | completed | failed | expired`), `txn_ref_no` (unique), `bill_reference`, `jazzcash_response_code`, `jazzcash_response_message`, `jazzcash_retrieval_reference_no`, `jazzcash_auth_code`, `raw_callback_payload` (jsonb), `paid_at`, `expires_at`, `refund_status` (nullable, `completed | failed`), `refunded_amount`, `jazzcash_refund_response_code`, `jazzcash_refund_response_message`, `refunded_at`, `createdAt`, `updatedAt` — same shape the old `payments` table used for ride payments.
 - `payments` table: still physically exists in the database (holds historical ride-payment records from before this change) but is no longer read or written by any current code path — safe to ignore going forward.
 - **Driver live location is not a database table.** It's held in an in-memory map on the server process (`driverId → { lat, lng, updatedAt }`), populated by the `driver:location:update` socket event and expiring after 2 minutes of inactivity (see Ride Matching Rules above). This means it does **not** survive a server restart/redeploy, and does **not** work correctly if the backend is ever scaled to multiple instances without adding a shared store (e.g. Redis) — worth knowing before that becomes a deployment change.
 
@@ -789,7 +821,7 @@ JazzCash's Mobile Wallet checkout flow requires the payer's CNIC (`pp_CNIC`) on 
 
 **Design decisions made without further confirmation (flag if wrong):**
 - CNIC is collected **once on the driver's profile** and reused on every top-up, rather than re-asked on each `initiate` call.
-- Stored as the **full 13-digit CNIC** (no dashes), not the last-6-digits variant some JazzCash Mobile-Wallet integration docs describe — confirm against your actual JazzCash merchant integration guide before shipping, since sending the wrong format/length in `pp_CNIC` will get transactions rejected by JazzCash, not just fail validation locally.
+- Stored as the **full 13-digit CNIC** (no dashes) on the user's profile — this part is fine. ~~Sent to JazzCash as-is~~ **Update, see the "Rewritten Against JazzCash's Official 2026 REST Guides" entry near the end of this document: this was wrong.** `pp_CNIC` must be the last 6 digits only; the service now slices it at send time. The stored profile field itself did not need to change.
 - This is separate from `jazzcash_account_number`/`jazzcash_account_title` (`PATCH /api/users/driver/payment-method`) — that's the driver's own payout account shown to riders; CNIC is for the driver's own top-up checkout, a different money direction.
 
 **Not yet verified in this change (please confirm before relying on it in production):**
@@ -826,6 +858,33 @@ Found while investigating a report that ride history "isn't showing properly" fo
 - Real email delivery (SMTP) was not exercised in this test — the OTP was read directly from the database rather than from an actual inbox. Confirm `sendPasswordResetOtpEmail` actually delivers before shipping.
 - No migration needed — reuses the existing `users.reset_password_token`/`reset_password_expires_at` columns (previously held a hex token; now holds first an OTP, then a reset token).
 - The driver/rider (Flutter) app needs a 3-screen update: enter email → enter OTP (screen calls `forgot-password/verify-otp`, stores the returned `resetToken`) → enter new password (screen calls `reset-password` with that stored token). There's no more link/deep-link to handle.
+
+---
+
+## JazzCash Wallet Top-Up: Rewritten Against JazzCash's Official 2026 REST Guides
+
+The prior JazzCash top-up implementation was a single, self-consistent-looking flow, but it didn't actually match JazzCash's real API contracts once checked against JazzCash's own MWallet REST API v2.0, Card Page Redirection v1.1, IPN, Status Inquiry v2.0, and MWallet/Card Refund API guides. Rewritten to match those guides field-for-field.
+
+**Bugs fixed:**
+- **`pp_CNIC` was sent as the full 13-digit CNIC.** MWallet REST API v2.0's own sample payload is explicit — `"pp_CNIC": "{{Last 6-digits}}"`. This resolves the "flag if wrong" note left in the CNIC changelog entry above: it was wrong. The service now sends `user.cnic.slice(-6)`; the stored profile field is unchanged (still the full CNIC), only the value sent to JazzCash changed.
+- **The "hosted checkout" endpoint used for top-ups was actually the Card Page Redirection v1.1 endpoint, posted with MWallet-style fields (`pp_CNIC`, no `pp_TxnType`/`pp_Version`).** JazzCash's REST API v2.0 (with CNIC) isn't a redirect/checkout product at all — it's a direct, synchronous, server-to-server mobile-account debit with no `pp_TxnType`/`pp_Version`/`pp_ReturnURL` fields and a completely different endpoint (`/api/v2/rest/payments/m-wallet`, JSON body, not a browser POST). The old code was posting `pp_CNIC` to what was actually the Card Page Redirection endpoint, which doesn't accept or expect that field. These are now correctly split into two methods (`mwallet` and `card` — see Wallet Top-Up above), each hitting its own documented endpoint with its own exact field set.
+- **A single response-code check (`=== "000"`) was used everywhere**, including for the Card Page Redirection browser callback. JazzCash's own IPN guide is explicit that `121` — not `000` — is the payment-success code on that payload (`000` there just means "IPN acknowledged", a different signal). The old callback handler would only ever treat a top-up as successful if JazzCash happened to send `000` on that channel, which it doesn't for a completed card payment — this looks like it would have silently failed to credit **every successful card top-up**. Fixed by introducing `isApiSuccessCode` (`000`) vs `isPaymentSuccessCode` (`121`) and using the right one per API (see the distinction called out in the Wallet Top-Up section above).
+- Status Inquiry was hitting a legacy-looking `/ApplicationAPI/API/PaymentInquiry/Inquire` URL not present in any of JazzCash's current guides; switched to the documented `/api/v2/rest/payments/status/inquiry`, and the sync logic now correctly requires both `pp_ResponseCode === "000"` (inquiry call ok) and `pp_PaymentResponseCode === "121"` (payment actually complete) rather than a single check.
+- The Card Page Redirection checkout POST URL was pointed at an old `sandbox.jazzcash.com.pk/CustomerPortal/...` host; switched to the documented `onlinepayments.jazzcash.com.pk/payment-orchestrator/CustomerPortal/...` host, and the field set now matches the guide's sample exactly (`pp_Version: "1.1"`, `pp_TxnType: "MPAY"`, full `ppmpf_1..5`/`pp_BankID`/`pp_ProductID`/`pp_SubMerchantID` empty-string fields — previously some of these were missing or repurposed).
+- `pp_TxnExpiryDateTime` was driven by a configurable `JAZZCASH_TXN_EXPIRY_MINUTES` env var (defaulting to 60). Every JazzCash guide states this must be exactly "transaction date + 1 day" — not merchant-configurable — so the service now always computes `+24h` directly; `JAZZCASH_TXN_EXPIRY_MINUTES` still exists but now only governs an unrelated internal concern (how long we keep reusing a locally-pending `card` top-up before minting a fresh `pp_TxnRefNo` on a retried `initiate`).
+
+**Added:**
+- A dedicated REST IPN listener, `POST /api/wallet/topup/jazzcash/ipn` — previously not implemented at all, despite JazzCash's MWallet guide listing it as "Mandatory". Must be registered as the IPN URL in the JazzCash merchant portal (Integration > Credentials) for it to actually receive anything; see `JAZZCASH_IPN_URL` in `.env.example`.
+- `method: "mwallet"` on `POST /api/wallet/topup/jazzcash/initiate` — direct MWallet debit, synchronous, no redirect (see Wallet Top-Up above). `method: "card"` is the (default) Page Redirection flow the old code was attempting.
+- `POST /api/wallet/topup/:topUpId/refund` (Admin) — MWallet Refund API v1.1 / Card Refund API v2.0, previously not implemented at all. New `wallet_topups` columns: `method`, `mobile_number`, `refund_status`, `refunded_amount`, `jazzcash_refund_response_code`, `jazzcash_refund_response_message`, `refunded_at` (migration `AddJazzCashMethodAndRefundFieldsToWalletTopups`).
+- `JAZZCASH_MERCHANT_MPIN` env var — required by both refund APIs, wasn't previously collected anywhere. **Must be set in `.env` before `/refund` will work** — left blank in this change since the actual MPIN isn't something to guess at.
+
+**Not yet verified in this change (please confirm before relying on it in production):**
+- `tsc --noEmit` is clean, but none of this was exercised against JazzCash's real sandbox — the MWallet endpoint in particular depends on the sandbox mobile account actually being provisioned to approve/complete a debit synchronously; confirm the full `mwallet` flow (initiate → immediate `completed`/`failed`) and the `card` flow (initiate → redirect → callback **and** IPN both landing → single credit) against real sandbox transactions before shipping.
+- `JAZZCASH_MERCHANT_MPIN` is blank in `.env` — refunds will fail (or be rejected by JazzCash) until it's filled in from the merchant portal.
+- The Card Page Redirection POST URL (`.../payment-orchestrator/CustomerPortal/transactionmanagement/merchantform`) was reconciled from an inconsistency between JazzCash's own documented endpoint tables (hyphenated `payment-orchestrator`) and its bundled PHP sample code (unhyphenated `paymentorchestrator`) — went with the hyphenated form since every other endpoint in every other guide uses it, but this is a guess between two things JazzCash's own materials disagree on. Confirm the checkout page actually loads against sandbox; if it 404s, try `JAZZCASH_CARD_CHECKOUT_URL` with the unhyphenated path.
+- ~~Run `npm run migration:run`~~ **Done** — ran against production; it also caught up a previously-pending `AddRefreshTokenToUsers` migration in the same pass. `wallet_topups` now has all the new columns.
+- The driver (Flutter) app isn't touched by this change and doesn't yet expose a `method`/`mobileNumber` choice on its top-up screen (if it has one) — needs updating to let a driver pick `mwallet` vs `card` and, for `mwallet`, confirm/enter their JazzCash mobile number.
 
 ---
 
