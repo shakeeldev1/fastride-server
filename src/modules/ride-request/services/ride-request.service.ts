@@ -65,21 +65,11 @@ export class RideRequestService {
     const vehicleType = dto.vehicleType as RideVehicleType;
     const estimatedDistanceKm = this.resolveEstimatedDistanceKm(dto);
 
-    let fareBreakdown;
-
-    try {
-      fareBreakdown = calculateRideFare({
-        vehicleType,
-        serviceArea,
-        estimatedDistanceKm,
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message === 'Sorry service not available') {
-        throw new BadRequestException(error.message);
-      }
-
-      throw error;
-    }
+    const fareBreakdown = calculateRideFare({
+      vehicleType,
+      serviceArea,
+      estimatedDistanceKm,
+    });
 
     const offeredPriceValue = dto.offeredPrice !== undefined ? Number(dto.offeredPrice) : Number(fareBreakdown.totalFare);
 

@@ -366,7 +366,7 @@ Once a driver is selected, the rider's app can track their live position over So
   - `dropoffLatitude` (number, required)
   - `dropoffLongitude` (number, required)
   - `serviceArea` (string, optional) allowed: `city | out_of_city`
-  - `offeredPrice` (number, optional) — if provided, backend accepts this as the rider's offered price (recommended to be >= estimate). Note `companyCommission`/`driverPayout` are always derived from the backend's own calculated fare (12% of the distance/vehicle-type based total), **not** from a custom `offeredPrice`.
+  - `offeredPrice` (number, optional) — if provided, backend accepts this as the rider's offered price (recommended to be >= estimate). Note `companyCommission`/`driverPayout` are always derived from the backend's own calculated fare (15% of the distance/vehicle-type based total), **not** from a custom `offeredPrice`.
   - `notes` (string, optional)
 - Response: 201
   - `message`
