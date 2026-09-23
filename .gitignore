@@ -12,12 +12,9 @@ build/
 *.tsbuildinfo
 
 # Environment variables
-.env
-.env.local
 .env.*.local
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -39,3 +36,8 @@ coverage/
 # Temporary files
 tmp/
 temp/
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore
+config.bat
